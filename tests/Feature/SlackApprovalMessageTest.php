@@ -11,6 +11,7 @@ use App\Services\SlackApprovalService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Facades\URL;
 use Tests\TestCase;
 
 class SlackApprovalMessageTest extends TestCase
@@ -20,7 +21,10 @@ class SlackApprovalMessageTest extends TestCase
     public function test_send_approval_message_posts_to_slack(): void
     {
         Storage::fake('local');
+        URL::forceRootUrl('https://kiosk.test');
+
         config([
+            'app.url' => 'https://kiosk.test',
             'slack.bot_token' => 'xoxb-test',
             'slack.reset_channel_id' => 'C_RESET',
             'student-password-reset.slack_approval_required' => true,
@@ -32,7 +36,6 @@ class SlackApprovalMessageTest extends TestCase
                 'channel' => 'C_RESET',
                 'ts' => '1111.2222',
             ]),
-            'slack.com/api/files.upload' => Http::response(['ok' => true]),
         ]);
 
         $student = Student::factory()->registered()->create();
@@ -71,10 +74,16 @@ class SlackApprovalMessageTest extends TestCase
         $this->assertSame('C_RESET', $request->slack_channel_id);
         $this->assertSame('1111.2222', $request->slack_message_ts);
 
-        Http::assertSent(function ($request) {
-            return str_contains($request->url(), 'chat.postMessage')
-                && str_contains($request->body(), 'Approve Reset')
-                && str_contains($request->body(), 'Passwords are never posted in Slack');
-        });
+        $recorded = Http::recorded();
+        $this->assertNotEmpty($recorded);
+
+        [$request] = $recorded[0];
+        $this->assertStringContainsString('chat.postMessage', $request->url());
+
+        $payload = json_encode($request->data());
+        $this->assertStringContainsString('Approve Reset', $payload);
+        $this->assertStringContainsString('Photo at kiosk (reset request)', $payload);
+        $this->assertStringContainsString('image_url', $payload);
+        $this->assertStringContainsString('slack\/photos', $payload);
     }
 }

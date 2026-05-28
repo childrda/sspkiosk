@@ -4,6 +4,7 @@ namespace App\Services\Slack;
 
 use Illuminate\Http\Client\PendingRequest;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 
 class SlackApiClient
 {
@@ -50,18 +51,81 @@ class SlackApiClient
     }
 
     /**
+     * Upload a file to a channel using files.getUploadURLExternal + files.completeUploadExternal.
+     *
      * @return array<string, mixed>
      */
-    public function uploadFile(string $channelId, string $filename, string $contents, string $title): array
-    {
-        $response = Http::withToken((string) config('slack.bot_token'))
-            ->attach('file', $contents, $filename)
-            ->post('https://slack.com/api/files.upload', [
-                'channels' => $channelId,
-                'title' => $title,
+    public function uploadFile(
+        string $channelId,
+        string $filename,
+        string $contents,
+        string $title,
+        ?string $threadTs = null,
+    ): array {
+        $token = (string) config('slack.bot_token');
+        $length = strlen($contents);
+
+        $uploadUrlResponse = Http::withToken($token)
+            ->acceptJson()
+            ->asForm()
+            ->post('https://slack.com/api/files.getUploadURLExternal', [
                 'filename' => $filename,
+                'length' => $length,
+            ])
+            ->json();
+
+        if (! ($uploadUrlResponse['ok'] ?? false)) {
+            Log::warning('Slack files.getUploadURLExternal failed.', [
+                'error' => $uploadUrlResponse['error'] ?? 'unknown',
             ]);
 
-        return $response->json() ?? [];
+            return $uploadUrlResponse ?? ['ok' => false];
+        }
+
+        $uploadUrl = (string) ($uploadUrlResponse['upload_url'] ?? '');
+        $fileId = (string) ($uploadUrlResponse['file_id'] ?? '');
+
+        if ($uploadUrl === '' || $fileId === '') {
+            return ['ok' => false, 'error' => 'missing_upload_url_or_file_id'];
+        }
+
+        $binaryUpload = Http::withBody($contents, 'application/octet-stream')
+            ->post($uploadUrl);
+
+        if (! $binaryUpload->successful()) {
+            Log::warning('Slack binary file upload failed.', [
+                'status' => $binaryUpload->status(),
+            ]);
+
+            return ['ok' => false, 'error' => 'binary_upload_failed'];
+        }
+
+        $completePayload = [
+            'files' => [
+                [
+                    'id' => $fileId,
+                    'title' => $title,
+                ],
+            ],
+            'channel_id' => $channelId,
+        ];
+
+        if ($threadTs !== null) {
+            $completePayload['thread_ts'] = $threadTs;
+        }
+
+        $completeResponse = Http::withToken($token)
+            ->acceptJson()
+            ->asJson()
+            ->post('https://slack.com/api/files.completeUploadExternal', $completePayload)
+            ->json();
+
+        if (! ($completeResponse['ok'] ?? false)) {
+            Log::warning('Slack files.completeUploadExternal failed.', [
+                'error' => $completeResponse['error'] ?? 'unknown',
+            ]);
+        }
+
+        return $completeResponse ?? ['ok' => false];
     }
 }

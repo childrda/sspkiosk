@@ -9,6 +9,7 @@ use App\Jobs\ResetGooglePasswordJob;
 use App\Models\PasswordResetRequest;
 use App\Models\StudentPhoto;
 use App\Services\Slack\SlackApiClient;
+use App\Services\Slack\SlackPhotoUrlService;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
@@ -23,6 +24,7 @@ class SlackApprovalService
 
     public function __construct(
         private readonly SlackApiClient $slackApi,
+        private readonly SlackPhotoUrlService $slackPhotoUrls,
         private readonly SlackApproverService $approverService,
         private readonly PasswordResetRequestRiskService $riskService,
         private readonly ResetAttemptLimiterService $attemptLimiter,
@@ -47,9 +49,6 @@ class SlackApprovalService
             ->latest('id')
             ->first();
 
-        $this->uploadPhotoIfPresent($channelId, $registrationPhoto, 'Registration photo — '.$student->name);
-        $this->uploadPhotoIfPresent($channelId, $request->resetPhoto, 'Reset request photo — '.$student->name);
-
         $asked = count($request->challenge_questions_presented ?? []);
         $required = config('student-password-reset.challenge_questions_required_correct');
         $flags = $this->riskService->flagsFor($request);
@@ -64,6 +63,7 @@ class SlackApprovalService
             request: $request,
             statusLabel: 'Pending approval',
             includeActions: true,
+            photoBlocks: $this->photoBlocksForApproval($request->resetPhoto, $registrationPhoto, $student->name),
             extraFields: [
                 '*Student*' => "{$student->name} ({$student->email})",
                 '*School / grade*' => trim(($student->school ?? '—').' / '.($student->grade ?? '—')),
@@ -95,10 +95,27 @@ class SlackApprovalService
             throw new \RuntimeException('Failed to send Slack approval message.');
         }
 
+        $messageTs = $response['ts'] ?? null;
+
         $request->update([
             'slack_channel_id' => $response['channel'] ?? $channelId,
-            'slack_message_ts' => $response['ts'] ?? null,
+            'slack_message_ts' => $messageTs,
         ]);
+
+        if ($messageTs !== null) {
+            $this->uploadPhotoFallbackToThread(
+                $channelId,
+                $messageTs,
+                $request->resetPhoto,
+                'Kiosk reset photo — '.$student->name,
+            );
+            $this->uploadPhotoFallbackToThread(
+                $channelId,
+                $messageTs,
+                $registrationPhoto,
+                'Registration photo — '.$student->name,
+            );
+        }
     }
 
     /**
@@ -350,11 +367,59 @@ class SlackApprovalService
      * @param  array<string, string>  $extraFields
      * @return list<array<string, mixed>>
      */
+    /**
+     * @return list<array<string, mixed>>
+     */
+    private function photoBlocksForApproval(
+        ?StudentPhoto $resetPhoto,
+        ?StudentPhoto $registrationPhoto,
+        string $studentName,
+    ): array {
+        $blocks = [];
+
+        $resetUrl = $this->slackPhotoUrls->temporarySignedUrl($resetPhoto);
+
+        if ($resetUrl !== null) {
+            $blocks[] = [
+                'type' => 'section',
+                'text' => [
+                    'type' => 'mrkdwn',
+                    'text' => '*Photo at kiosk (reset request)*',
+                ],
+            ];
+            $blocks[] = [
+                'type' => 'image',
+                'image_url' => $resetUrl,
+                'alt_text' => "Reset request photo for {$studentName}",
+            ];
+        }
+
+        $registrationUrl = $this->slackPhotoUrls->temporarySignedUrl($registrationPhoto);
+
+        if ($registrationUrl !== null) {
+            $blocks[] = [
+                'type' => 'section',
+                'text' => [
+                    'type' => 'mrkdwn',
+                    'text' => '*Registration photo (on file)*',
+                ],
+            ];
+            $blocks[] = [
+                'type' => 'image',
+                'image_url' => $registrationUrl,
+                'alt_text' => "Registration photo for {$studentName}",
+            ];
+        }
+
+        return $blocks;
+    }
+
     private function buildMessageBlocks(
         PasswordResetRequest $request,
         string $statusLabel,
         bool $includeActions,
         array $extraFields,
+        array $photoBlocks = [],
     ): array {
         $blocks = [
             [
@@ -388,6 +453,8 @@ class SlackApprovalService
                 ],
             ];
         }
+
+        array_push($blocks, ...$photoBlocks);
 
         if ($includeActions) {
             $blocks[] = [
@@ -439,9 +506,20 @@ class SlackApprovalService
         return 'System generated a temporary password and showed it to the student. It is encrypted and will only become active if this request is approved. The password is not shown in Slack.';
     }
 
-    private function uploadPhotoIfPresent(string $channelId, ?StudentPhoto $photo, string $title): void
-    {
+    /**
+     * Thread file upload when inline image blocks are unavailable (non-HTTPS APP_URL) or as backup.
+     */
+    private function uploadPhotoFallbackToThread(
+        string $channelId,
+        string $threadTs,
+        ?StudentPhoto $photo,
+        string $title,
+    ): void {
         if ($photo === null) {
+            return;
+        }
+
+        if ($this->slackPhotoUrls->temporarySignedUrl($photo) !== null) {
             return;
         }
 
@@ -454,7 +532,7 @@ class SlackApprovalService
         $contents = Storage::disk($disk)->get($photo->storage_path);
         $filename = basename($photo->storage_path);
 
-        $response = $this->slackApi->uploadFile($channelId, $filename, $contents, $title);
+        $response = $this->slackApi->uploadFile($channelId, $filename, $contents, $title, $threadTs);
 
         if (! ($response['ok'] ?? false)) {
             Log::warning('Slack photo upload failed.', [

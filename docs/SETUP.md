@@ -69,12 +69,14 @@ Use `config('...')` in application code — not `env()` outside config files.
 
 ## Slack approval (Phase 6)
 
-1. Create a Slack app with **Bot Token Scopes**: `chat:write`, `files:write` (or `files:upload`), `usergroups:read`.
+1. Create a Slack app with **Bot Token Scopes**: `chat:write`, `files:write`, `usergroups:read`.
 2. Enable **Interactivity** with Request URL: `https://your-host/slack/interactions`
 3. Set in `.env`: `SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET`, `SLACK_RESET_CHANNEL_ID`, `SLACK_APPROVER_USERGROUP_ID`
 4. Invite the bot to the reset channel.
 
-When a pending reset is created, `SendSlackResetApprovalJob` posts a Block Kit message with student/kiosk details, photos (uploaded to the channel), challenge results, risk flags, and **Approve / Deny / Needs Office Verification** buttons.
+When a pending reset is created, `SendSlackResetApprovalJob` posts a Block Kit message with student/kiosk details, **inline photos** (kiosk reset photo and registration photo on file), challenge results, risk flags, and **Approve / Deny / Needs Office Verification** buttons.
+
+Photos appear as **image blocks** inside the approval message when `APP_URL` uses **HTTPS** and Slack can reach your server. Signed links expire after `SLACK_PHOTO_URL_TTL_MINUTES` (default 15). If `APP_URL` is not public HTTPS (for example local dev), photos are uploaded as **thread replies** under the message instead.
 
 Approving dispatches `ResetGooglePasswordJob`. Passwords are **never** sent to Slack.
 

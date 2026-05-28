@@ -12,4 +12,6 @@ return [
 
     'signature_tolerance_seconds' => (int) env('SLACK_SIGNATURE_TOLERANCE_SECONDS', 300),
 
+    'photo_url_ttl_minutes' => (int) env('SLACK_PHOTO_URL_TTL_MINUTES', 15),
+
 ];

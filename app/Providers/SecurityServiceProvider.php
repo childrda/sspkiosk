@@ -51,5 +51,9 @@ class SecurityServiceProvider extends ServiceProvider
                 $config['max_attempts'],
             )->by($request->ip());
         });
+
+        RateLimiter::for('slack-photo', function (Request $request): Limit {
+            return Limit::perMinute(120)->by($request->ip());
+        });
     }
 }
