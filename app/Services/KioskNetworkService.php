@@ -39,6 +39,36 @@ class KioskNetworkService
             && config('kiosk.allowed_networks') === [];
     }
 
+    public function findEnrolledKioskByIp(string $ip): ?Kiosk
+    {
+        $eligibleKiosks = Kiosk::query()
+            ->whereNotNull('secret_hash')
+            ->where('secret_hash', '!=', '')
+            ->get()
+            ->filter(fn (Kiosk $kiosk) => $kiosk->isActive());
+
+        $exactMatches = $eligibleKiosks
+            ->filter(fn (Kiosk $kiosk) => filled($kiosk->allowed_ip) && $kiosk->allowed_ip === $ip)
+            ->values();
+
+        if ($exactMatches->count() === 1) {
+            return $exactMatches->first();
+        }
+
+        if ($exactMatches->count() > 1) {
+            return null;
+        }
+
+        $subnetMatches = $eligibleKiosks
+            ->filter(fn (Kiosk $kiosk) => filled($kiosk->allowed_subnet)
+                && $this->ipMatchesNetwork($ip, $kiosk->allowed_subnet))
+            ->values();
+
+        return $subnetMatches->count() === 1
+            ? $subnetMatches->first()
+            : null;
+    }
+
     public function ipMatchesNetwork(string $ip, string $network): bool
     {
         $network = trim($network);
