@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Admin;
 
+use App\Enums\KioskEnrollmentType;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Admin\StoreKioskRequest;
 use App\Models\Kiosk;
@@ -32,7 +33,7 @@ class KioskController extends Controller
             ->orderBy('name')
             ->get()
             ->map(function (Kiosk $kiosk): Kiosk {
-                $kiosk->setAttribute('is_online', $this->adminKiosks->isOnline($kiosk));
+                $kiosk->setAttribute('last_seen_is_fresh', $this->adminKiosks->lastSeenIsFresh($kiosk));
 
                 return $kiosk;
             });
@@ -55,8 +56,9 @@ class KioskController extends Controller
 
         return view('admin.kiosks.show', [
             'kiosk' => $kiosk,
-            'isOnline' => $this->adminKiosks->isOnline($kiosk),
-            'isEnrolled' => $kiosk->secret_hash !== null,
+            'lastSeenIsFresh' => $this->adminKiosks->lastSeenIsFresh($kiosk),
+            'isEnrolled' => $kiosk->enrolled_at !== null,
+            'isDeviceAgent' => $kiosk->enrollment_type === KioskEnrollmentType::DeviceAgent,
             'recentRequests' => $recentRequests,
         ]);
     }
@@ -145,6 +147,15 @@ class KioskController extends Controller
             ->route('admin.kiosks.show', $kiosk)
             ->with('status', 'Enrollment code issued.')
             ->with('enrollment_code', $code);
+    }
+
+    public function resetReenrollment(Request $request, Kiosk $kiosk): RedirectResponse
+    {
+        $this->adminKiosks->resetReenrollment($kiosk, (int) $request->user()->id);
+
+        return redirect()
+            ->route('admin.kiosks.show', $kiosk)
+            ->with('status', 'Enrollment cleared. Issue a new enrollment code before putting this kiosk back in service.');
     }
 
     public function destroy(Request $request, Kiosk $kiosk): RedirectResponse

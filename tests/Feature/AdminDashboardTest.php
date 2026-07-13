@@ -64,6 +64,7 @@ class AdminDashboardTest extends TestCase
                 'name' => 'Library Kiosk',
                 'school' => 'Main Campus',
                 'location' => 'Library',
+                'allowed_ip' => '10.10.20.15',
             ])
             ->assertRedirect();
 
@@ -84,7 +85,7 @@ class AdminDashboardTest extends TestCase
     public function test_admin_can_rotate_kiosk_secret(): void
     {
         $admin = $this->adminUser();
-        $kiosk = Kiosk::factory()->create();
+        $kiosk = Kiosk::factory()->enrolled()->create(['allowed_ip' => '10.0.0.1']);
 
         $this->actingAs($admin)
             ->post(route('admin.kiosks.rotate-secret', $kiosk))
@@ -99,7 +100,7 @@ class AdminDashboardTest extends TestCase
     public function test_admin_can_archive_kiosk_without_reset_history(): void
     {
         $admin = $this->adminUser();
-        $kiosk = Kiosk::factory()->create();
+        $kiosk = Kiosk::factory()->create(['allowed_ip' => '10.0.0.1']);
 
         $this->actingAs($admin)
             ->delete(route('admin.kiosks.destroy', $kiosk))
@@ -116,7 +117,7 @@ class AdminDashboardTest extends TestCase
     public function test_admin_can_archive_kiosk_with_reset_history(): void
     {
         $admin = $this->adminUser();
-        $kiosk = Kiosk::factory()->create();
+        $kiosk = Kiosk::factory()->create(['allowed_ip' => '10.0.0.1']);
         PasswordResetRequest::factory()->create(['kiosk_id' => $kiosk->id]);
 
         $this->actingAs($admin)

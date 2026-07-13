@@ -26,6 +26,8 @@ class KioskHeartbeatAgentTest extends TestCase
 
         $kiosk = Kiosk::factory()->create(array_merge([
             'secret_hash' => $credentials->encryptSecret($secret),
+            'enrolled_at' => now(),
+            'enrollment_type' => \App\Enums\KioskEnrollmentType::DeviceAgent,
             'last_seen_at' => null,
         ], $attributes));
 
@@ -134,33 +136,25 @@ class KioskHeartbeatAgentTest extends TestCase
             ->assertJson(['reason' => 'timestamp_expired']);
     }
 
-    public function test_fresh_heartbeat_allows_reset_but_stale_redirects_to_unavailable(): void
+    public function test_stale_last_seen_does_not_block_reset_access(): void
     {
         config([
             'kiosk.allowed_networks' => ['127.0.0.1'],
-            'kiosk.require_active_heartbeat' => true,
-            'kiosk.heartbeat_expires_after_seconds' => 300,
             'student-password-reset.reset_password_mode' => 'temporary_generated',
         ]);
 
         [$kiosk, $secret] = $this->enrolledKiosk();
-        $body = json_encode(['device_fingerprint' => 'fp-test']);
-        $headers = $this->kioskAuthHeaders($kiosk, $secret, 'POST', '/kiosk/heartbeat', [], $body);
+        $kiosk->update([
+            'allowed_ip' => '127.0.0.1',
+            'enrolled_at' => now(),
+            'enrollment_type' => \App\Enums\KioskEnrollmentType::DeviceAgent,
+            'last_seen_at' => now()->subHours(6),
+        ]);
 
-        $this->postSignedKioskRequest($headers, $body)->assertOk();
-
-        $this->withSession([config('kiosk.registration_session_kiosk_key') => $kiosk->id])
+        $this->withServerVariables(['REMOTE_ADDR' => '127.0.0.1'])
+            ->withSession([config('kiosk.registration_session_kiosk_key') => $kiosk->id])
             ->get(route('kiosk.reset.index'))
             ->assertOk();
-
-        $expiresAfter = (int) config('kiosk.heartbeat_expires_after_seconds');
-        Carbon::setTestNow(now()->addSeconds($expiresAfter + 1));
-
-        $this->withSession([config('kiosk.registration_session_kiosk_key') => $kiosk->id])
-            ->get(route('kiosk.reset.index'))
-            ->assertRedirect(route('kiosk.reset.unavailable'));
-
-        Carbon::setTestNow();
     }
 
     public function test_prune_nonces_deletes_stale_rows_and_keeps_recent_rows(): void
@@ -193,7 +187,10 @@ class KioskHeartbeatAgentTest extends TestCase
         config(['kiosk.allowed_networks' => ['127.0.0.1']]);
 
         $enrollment = app(KioskEnrollmentService::class);
-        $kiosk = $enrollment->createKiosk(['name' => 'Browser Kiosk']);
+        $kiosk = $enrollment->createKiosk([
+            'name' => 'Browser Kiosk',
+            'allowed_ip' => '10.10.20.15',
+        ]);
         $code = $enrollment->issueEnrollmentCode($kiosk);
 
         $response = $this->post(route('kiosk.enroll'), [
@@ -201,12 +198,12 @@ class KioskHeartbeatAgentTest extends TestCase
         ]);
 
         $response->assertRedirect(route('kiosk.enroll.complete'));
-        $response->assertSessionHas('kiosk_secret');
+        $response->assertSessionHas('browser_enrollment', true);
         $response->assertSessionHas(config('kiosk.registration_session_kiosk_key'), $kiosk->id);
 
         $this->get(route('kiosk.enroll.complete'))
             ->assertOk()
-            ->assertSee('Store this device secret now', false);
+            ->assertSee('Confirm the DHCP reservation', false);
     }
 
     public function test_admin_provisioning_bundle_downloads_agent_conf_once(): void

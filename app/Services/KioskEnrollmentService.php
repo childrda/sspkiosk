@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Enums\KioskEnrollmentType;
 use App\Enums\KioskStatus;
 use App\Exceptions\KioskAuthenticationException;
 use App\Models\Kiosk;
@@ -30,6 +31,8 @@ class KioskEnrollmentService
             'allowed_ip' => $attributes['allowed_ip'] ?? null,
             'allowed_subnet' => $attributes['allowed_subnet'] ?? null,
             'secret_hash' => null,
+            'enrolled_at' => null,
+            'enrollment_type' => null,
         ]);
     }
 
@@ -47,9 +50,9 @@ class KioskEnrollmentService
     }
 
     /**
-     * @return array{kiosk_id: int, kiosk_uuid: string, secret: string}
+     * @return array{kiosk_id: int, kiosk_uuid: string, kiosk_name: string, allowed_ip: ?string, secret: ?string, enrollment_type: string}
      */
-    public function enroll(string $enrollmentCode, string $ipAddress): array
+    public function enroll(string $enrollmentCode, string $ipAddress, bool $deviceAgent): array
     {
         $enrollmentCode = trim($enrollmentCode);
 
@@ -57,7 +60,7 @@ class KioskEnrollmentService
             throw new KioskAuthenticationException('Enrollment code is required.', 'missing_enrollment_code');
         }
 
-        return DB::transaction(function () use ($enrollmentCode, $ipAddress): array {
+        return DB::transaction(function () use ($enrollmentCode, $deviceAgent): array {
             $record = $this->findValidEnrollmentCode($enrollmentCode);
 
             if ($record === null) {
@@ -70,12 +73,21 @@ class KioskEnrollmentService
                 throw new KioskAuthenticationException('Kiosk is not active.', 'kiosk_inactive');
             }
 
-            if ($kiosk->secret_hash !== null) {
+            if ($kiosk->enrolled_at !== null) {
                 throw new KioskAuthenticationException('Kiosk is already enrolled.', 'kiosk_already_enrolled');
             }
 
-            $secret = $this->credentials->generateSecret();
-            $kiosk->secret_hash = $this->credentials->encryptSecret($secret);
+            $secret = null;
+
+            if ($deviceAgent) {
+                $secret = $this->credentials->generateSecret();
+                $kiosk->secret_hash = $this->credentials->encryptSecret($secret);
+                $kiosk->enrollment_type = KioskEnrollmentType::DeviceAgent;
+            } else {
+                $kiosk->enrollment_type = KioskEnrollmentType::Browser;
+            }
+
+            $kiosk->enrolled_at = now();
             $kiosk->last_seen_at = now();
             $kiosk->save();
 
@@ -84,7 +96,10 @@ class KioskEnrollmentService
             return [
                 'kiosk_id' => $kiosk->id,
                 'kiosk_uuid' => $kiosk->kiosk_uuid,
+                'kiosk_name' => $kiosk->name,
+                'allowed_ip' => $kiosk->allowed_ip,
                 'secret' => $secret,
+                'enrollment_type' => $kiosk->enrollment_type->value,
             ];
         });
     }

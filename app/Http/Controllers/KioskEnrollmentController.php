@@ -36,10 +36,13 @@ class KioskEnrollmentController extends Controller
             );
         }
 
+        $deviceAgent = $request->expectsJson();
+
         try {
             $result = $this->enrollment->enroll(
                 $request->validated('enrollment_code'),
                 (string) $request->ip(),
+                $deviceAgent,
             );
         } catch (KioskAuthenticationException $exception) {
             $this->auditLog->logSystem('kiosk.enrollment.failed', 'kiosk', null, [
@@ -57,10 +60,11 @@ class KioskEnrollmentController extends Controller
 
         $this->auditLog->logSystem('kiosk.enrollment.completed', 'kiosk', (string) $result['kiosk_id'], [
             'kiosk_uuid' => $result['kiosk_uuid'],
+            'enrollment_type' => $result['enrollment_type'],
             'ip_address' => $request->ip(),
         ]);
 
-        if ($request->expectsJson()) {
+        if ($deviceAgent) {
             return response()->json([
                 'kiosk_id' => $result['kiosk_id'],
                 'kiosk_uuid' => $result['kiosk_uuid'],
@@ -76,13 +80,20 @@ class KioskEnrollmentController extends Controller
 
         return redirect()
             ->route('kiosk.enroll.complete')
-            ->with('kiosk_secret', $result['secret'])
-            ->with('kiosk_secret_for', $result['kiosk_id'])
-            ->with('enrolled_kiosk_uuid', $result['kiosk_uuid']);
+            ->with('browser_enrollment', true)
+            ->with('enrolled_kiosk_name', $result['kiosk_name'])
+            ->with('enrolled_kiosk_allowed_ip', $result['allowed_ip']);
     }
 
     public function showEnrollComplete(): View|RedirectResponse
     {
+        if (session('browser_enrollment')) {
+            return view('kiosk.enroll-browser-complete', [
+                'kioskName' => session('enrolled_kiosk_name'),
+                'allowedIp' => session('enrolled_kiosk_allowed_ip'),
+            ]);
+        }
+
         if (! session()->has('kiosk_secret')) {
             return redirect()
                 ->route('kiosk.enroll.form')

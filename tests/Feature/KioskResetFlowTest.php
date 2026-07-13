@@ -34,15 +34,23 @@ class KioskResetFlowTest extends TestCase
 
         $credentials = app(KioskCredentialService::class);
         $secret = $credentials->generateSecret();
-        $kiosk = \App\Models\Kiosk::factory()->create([
+        $kiosk = \App\Models\Kiosk::factory()->enrolled()->create([
             'secret_hash' => $credentials->encryptSecret($secret),
+            'allowed_ip' => '127.0.0.1',
             'last_seen_at' => now(),
         ]);
 
         $headers = $this->kioskAuthHeaders($kiosk, $secret, 'POST', '/kiosk/bind-session');
-        $this->withHeaders($headers)->post(route('kiosk.bind-session'));
+        $this->withServerVariables(['REMOTE_ADDR' => '127.0.0.1'])
+            ->withHeaders($headers)
+            ->post(route('kiosk.bind-session'));
 
         return [$kiosk, $secret, $this->bindKioskSession([], $kiosk->id)];
+    }
+
+    private function kioskRequest()
+    {
+        return $this->withServerVariables(['REMOTE_ADDR' => '127.0.0.1']);
     }
 
     private function registeredStudentWithQuestions(): Student
@@ -67,7 +75,7 @@ class KioskResetFlowTest extends TestCase
         $kiosk = \App\Models\Kiosk::query()->first();
         $headers = $this->kioskAuthHeaders($kiosk, $secret, 'POST', '/kiosk/reset/lookup');
 
-        $response = $this->withSession($session)
+        $response = $this->kioskRequest()->withSession($session)
             ->withHeaders($headers)
             ->post(route('kiosk.reset.lookup'), ['identifier' => 'unknown@students.example.org']);
 
@@ -85,7 +93,7 @@ class KioskResetFlowTest extends TestCase
         $student = $this->registeredStudentWithQuestions();
 
         $lookupHeaders = $this->kioskAuthHeaders($kiosk, $secret, 'POST', '/kiosk/reset/lookup');
-        $this->withSession($session)
+        $this->kioskRequest()->withSession($session)
             ->withHeaders($lookupHeaders)
             ->post(route('kiosk.reset.lookup'), ['identifier' => $student->email])
             ->assertRedirect(route('kiosk.reset.confirm'));
@@ -95,7 +103,7 @@ class KioskResetFlowTest extends TestCase
         ]);
 
         $photoHeaders = $this->kioskAuthHeaders($kiosk, $secret, 'POST', '/kiosk/reset/photo');
-        $this->withSession($session)
+        $this->kioskRequest()->withSession($session)
             ->withHeaders($photoHeaders)
             ->post(route('kiosk.reset.photo.store'), [
                 'photo' => UploadedFile::fake()->create('reset.jpg', 100, 'image/jpeg'),
@@ -118,7 +126,7 @@ class KioskResetFlowTest extends TestCase
         ]);
 
         $submitHeaders = $this->kioskAuthHeaders($kiosk, $secret, 'POST', '/kiosk/reset/submit');
-        $response = $this->withSession($session)
+        $response = $this->kioskRequest()->withSession($session)
             ->withHeaders($submitHeaders)
             ->post(route('kiosk.reset.submit'), ['answers' => $answers]);
 
@@ -140,14 +148,14 @@ class KioskResetFlowTest extends TestCase
         $student = $this->registeredStudentWithQuestions();
 
         $lookupHeaders = $this->kioskAuthHeaders($kiosk, $secret, 'POST', '/kiosk/reset/lookup');
-        $this->withSession($session)
+        $this->kioskRequest()->withSession($session)
             ->withHeaders($lookupHeaders)
             ->post(route('kiosk.reset.lookup'), ['identifier' => $student->email]);
 
         $session[config('kiosk.reset_session_student_key')] = $student->id;
 
         $photoHeaders = $this->kioskAuthHeaders($kiosk, $secret, 'POST', '/kiosk/reset/photo');
-        $this->withSession($session)
+        $this->kioskRequest()->withSession($session)
             ->withHeaders($photoHeaders)
             ->post(route('kiosk.reset.photo.store'), [
                 'photo' => UploadedFile::fake()->create('reset.jpg', 100, 'image/jpeg'),
@@ -163,7 +171,7 @@ class KioskResetFlowTest extends TestCase
         $session[config('kiosk.reset_session_questions_key')] = $presented;
 
         $submitHeaders = $this->kioskAuthHeaders($kiosk, $secret, 'POST', '/kiosk/reset/submit');
-        $this->withSession($session)
+        $this->kioskRequest()->withSession($session)
             ->withHeaders($submitHeaders)
             ->post(route('kiosk.reset.submit'), ['answers' => $answers]);
 

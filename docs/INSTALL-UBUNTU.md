@@ -831,7 +831,8 @@ Sign in at: `https://kiosk.yourdistrict.org/admin/login`
 
 1. Sign in at `https://kiosk.yourdistrict.org/admin/login`.
 2. Open **Kiosks → Create kiosk**.
-3. Save the **one-time enrollment code** shown after creation.
+3. Enter name, school, location, and the device's **allowed IP** (DHCP reservation). This field is required.
+4. Save the **one-time enrollment code** shown after creation.
 
 **CLI:**
 
@@ -842,11 +843,25 @@ php artisan kiosk:enrollment-code KIOSK_UUID_OR_ID
 
 ### Step 12.3 — Register (enroll) the physical kiosk
 
-**Recommended:** DHCP reservation per kiosk, `allowed_ip` on the kiosk record, and the **`sspkiosk-agent`** heartbeat service.
+Kiosk-mode **Chromebooks** are the supported default. Each device needs a unique **DHCP reservation** stored as the kiosk `allowed_ip`. Authorization uses that reserved IP on your managed network plus an enrolled kiosk record. Last-seen timestamps are advisory for staff only and do not gate student access.
+
+**Chromebook enrollment (browser, default):**
 
 1. In admin, create the kiosk and set **allowed IP** to the DHCP reservation.
 2. Issue a one-time enrollment code.
-3. On the kiosk PC:
+3. On the Chromebook kiosk browser, open `https://kiosk.yourdistrict.org/kiosk/enroll`.
+4. Enter the enrollment code and submit.
+5. Confirm the completion page shows the kiosk name and that the **DHCP reservation matches `allowed_ip`**.
+6. Set the browser home page to `/kiosk/reset`. Do not clear cookies for this profile.
+
+Browser enrollment does **not** mint a device secret. The kiosk layout sends a lightweight session heartbeat for dashboard visibility only.
+
+**Linux thin client with device agent (alternative):**
+
+Use this when the device can run systemd and store an HMAC credential. See `agent/README.md` (this agent does **not** run on ChromeOS).
+
+1. Create the kiosk with `allowed_ip` as above.
+2. On the kiosk PC:
 
    ```bash
    sudo bash /var/www/sspkiosk/agent/install.sh
@@ -855,18 +870,9 @@ php artisan kiosk:enrollment-code KIOSK_UUID_OR_ID
    sspkiosk-agent check
    ```
 
-4. Open `https://kiosk.yourdistrict.org/kiosk/reset` in kiosk mode. With `allowed_ip` set, a missing browser cookie is recovered from source IP automatically.
+3. Open `https://kiosk.yourdistrict.org/kiosk/reset` in kiosk mode.
 
-**Browser enrollment (alternative):**
-
-1. On the kiosk, open `https://kiosk.yourdistrict.org/kiosk/enroll`.
-2. Enter the enrollment code and submit.
-3. Copy the **one-time secret** on `/kiosk/enroll/complete`, install the agent, then continue to `/kiosk/reset`.
-4. Set the browser home page to `/kiosk/reset`. Do not clear cookies for this profile.
-
-**Admin:** After enrollment or secret rotation, download `agent.conf` once from the kiosk detail page (provisioning bundle) while the secret is flashed.
-
-If students will **register** on this kiosk and you cannot use DHCP + `allowed_ip`, call `POST /kiosk/bind-session` with HMAC headers and a browser session cookie.
+**Admin:** After device-agent enrollment or secret rotation, download `agent.conf` once from the kiosk detail page (provisioning bundle) while the secret is flashed.
 
 Full details: [SETUP.md — Registering a kiosk](SETUP.md#registering-a-kiosk).
 
@@ -876,8 +882,9 @@ Full details: [SETUP.md — Registering a kiosk](SETUP.md#registering-a-kiosk).
 |-------|-----|
 | App health | `curl -I https://kiosk.yourdistrict.org/up` |
 | Configuration | `php artisan ssp:config-check` (includes valid `RESET_PASSWORD_MODE`) |
-| Kiosk enrollment | `sspkiosk-agent check` succeeds; admin shows kiosk **Online** |
-| Heartbeat agent | `sudo systemctl status sspkiosk-agent` active |
+| Kiosk enrollment | Browser completion page or `sspkiosk-agent check` (device agent); admin shows kiosk **Last seen** |
+| Heartbeat (Chromebook) | Session heartbeat in browser; stale last-seen is advisory only |
+| Heartbeat agent (Linux) | `sudo systemctl status sspkiosk-agent` active |
 | Registration | Open `/register`, sign in with a student test account |
 | Kiosk reset | Complete a test reset through pending-password or submitted screen |
 | Reset mode | `.env` has `RESET_PASSWORD_MODE=temporary_generated` or `student_selected_pending_approval` |

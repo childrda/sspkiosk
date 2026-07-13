@@ -2,6 +2,7 @@
 
 namespace Database\Factories;
 
+use App\Enums\KioskEnrollmentType;
 use App\Enums\KioskStatus;
 use App\Models\Kiosk;
 use App\Services\KioskCredentialService;
@@ -38,9 +39,21 @@ class KioskFactory extends Factory
 
             return [
                 'secret_hash' => $credentials->encryptSecret($secret),
+                'enrolled_at' => now(),
+                'enrollment_type' => KioskEnrollmentType::DeviceAgent,
                 'last_seen_at' => now(),
             ];
         });
+    }
+
+    public function browserEnrolled(): static
+    {
+        return $this->state(fn (): array => [
+            'secret_hash' => null,
+            'enrolled_at' => now(),
+            'enrollment_type' => KioskEnrollmentType::Browser,
+            'last_seen_at' => now(),
+        ]);
     }
 
     public function disabled(): static

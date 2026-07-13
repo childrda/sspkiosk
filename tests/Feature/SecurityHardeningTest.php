@@ -85,12 +85,14 @@ class SecurityHardeningTest extends TestCase
 
         $credentials = app(KioskCredentialService::class);
         $secret = $credentials->generateSecret();
-        $kiosk = Kiosk::factory()->create([
+        $kiosk = Kiosk::factory()->enrolled()->create([
             'secret_hash' => $credentials->encryptSecret($secret),
+            'allowed_ip' => '127.0.0.1',
             'last_seen_at' => now(),
         ]);
 
-        $this->withHeaders($this->kioskAuthHeaders($kiosk, $secret, 'POST', '/kiosk/bind-session'))
+        $this->withServerVariables(['REMOTE_ADDR' => '127.0.0.1'])
+            ->withHeaders($this->kioskAuthHeaders($kiosk, $secret, 'POST', '/kiosk/bind-session'))
             ->post(route('kiosk.bind-session'));
 
         $student = Student::factory()->registered()->create([
@@ -100,7 +102,8 @@ class SecurityHardeningTest extends TestCase
 
         $headers = $this->kioskAuthHeaders($kiosk, $secret, 'POST', '/kiosk/reset/lookup');
 
-        $this->withSession([config('kiosk.registration_session_kiosk_key') => $kiosk->id])
+        $this->withServerVariables(['REMOTE_ADDR' => '127.0.0.1'])
+            ->withSession([config('kiosk.registration_session_kiosk_key') => $kiosk->id])
             ->withHeaders($headers)
             ->post(route('kiosk.reset.lookup'), ['identifier' => $student->email])
             ->assertRedirect()

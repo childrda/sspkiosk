@@ -85,5 +85,19 @@
     <main class="card">
         @yield('content')
     </main>
+    <script>
+        const HB_URL = @json(route('kiosk.session-heartbeat'));
+        const HB_MS = {{ (int) config('kiosk.heartbeat_interval_seconds') * 1000 }};
+        const TOKEN = @json(csrf_token());
+        const beat = () => fetch(HB_URL, {
+            method: 'POST',
+            headers: {'X-CSRF-TOKEN': TOKEN, 'Accept': 'application/json'},
+            credentials: 'same-origin',
+            keepalive: true,
+        }).catch(() => {});
+        beat();
+        setInterval(beat, HB_MS);
+        document.addEventListener('visibilitychange', () => { if (!document.hidden) beat(); });
+    </script>
 </body>
 </html>

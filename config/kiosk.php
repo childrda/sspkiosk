@@ -14,7 +14,7 @@ return [
     'heartbeat_expires_after_seconds' => (int) env('KIOSK_HEARTBEAT_EXPIRES_AFTER_SECONDS', 300),
 
     'require_active_heartbeat' => filter_var(
-        env('KIOSK_REQUIRE_ACTIVE_HEARTBEAT', true),
+        env('KIOSK_REQUIRE_ACTIVE_HEARTBEAT', false),
         FILTER_VALIDATE_BOOL
     ),
 

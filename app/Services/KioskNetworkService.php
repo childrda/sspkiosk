@@ -16,34 +16,57 @@ class KioskNetworkService
             return false;
         }
 
-        foreach (config('kiosk.allowed_networks', []) as $network) {
-            if ($this->ipMatchesNetwork($ip, $network)) {
+        $allowedNetworks = config('kiosk.allowed_networks', []);
+
+        if ($kiosk === null) {
+            if ($allowedNetworks === []) {
                 return true;
+            }
+
+            foreach ($allowedNetworks as $network) {
+                if ($this->ipMatchesNetwork($ip, $network)) {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        if ($allowedNetworks !== []) {
+            $withinOuterBoundary = false;
+
+            foreach ($allowedNetworks as $network) {
+                if ($this->ipMatchesNetwork($ip, $network)) {
+                    $withinOuterBoundary = true;
+
+                    break;
+                }
+            }
+
+            if (! $withinOuterBoundary) {
+                return false;
             }
         }
 
-        if ($kiosk === null) {
-            return config('kiosk.allowed_networks') === [];
+        if ($kiosk->allowed_ip || $kiosk->allowed_subnet) {
+            if ($kiosk->allowed_ip && $ip === $kiosk->allowed_ip) {
+                return true;
+            }
+
+            if ($kiosk->allowed_subnet && $this->ipMatchesNetwork($ip, $kiosk->allowed_subnet)) {
+                return true;
+            }
+
+            return false;
         }
 
-        if ($kiosk->allowed_ip && $ip === $kiosk->allowed_ip) {
-            return true;
-        }
-
-        if ($kiosk->allowed_subnet && $this->ipMatchesNetwork($ip, $kiosk->allowed_subnet)) {
-            return true;
-        }
-
-        return $kiosk->allowed_ip === null
-            && $kiosk->allowed_subnet === null
-            && config('kiosk.allowed_networks') === [];
+        return true;
     }
 
     public function findEnrolledKioskByIp(string $ip): ?Kiosk
     {
         $eligibleKiosks = Kiosk::query()
-            ->whereNotNull('secret_hash')
-            ->where('secret_hash', '!=', '')
+            ->whereNotNull('enrolled_at')
             ->get()
             ->filter(fn (Kiosk $kiosk) => $kiosk->isActive());
 

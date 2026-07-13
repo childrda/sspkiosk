@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Enums\KioskEnrollmentType;
 use App\Models\Kiosk;
 use App\Services\KioskCredentialService;
 use App\Services\KioskEnrollmentService;
@@ -17,7 +18,7 @@ class KioskEnrollmentTest extends TestCase
         config(['kiosk.allowed_networks' => ['127.0.0.1']]);
 
         $enrollment = app(KioskEnrollmentService::class);
-        $kiosk = $enrollment->createKiosk(['name' => 'Library Kiosk']);
+        $kiosk = $enrollment->createKiosk(['name' => 'Library Kiosk', 'allowed_ip' => '127.0.0.1']);
         $code = $enrollment->issueEnrollmentCode($kiosk);
 
         $response = $this->postJson(route('kiosk.enroll'), [
@@ -29,7 +30,9 @@ class KioskEnrollmentTest extends TestCase
 
         $kiosk->refresh();
         $this->assertNotNull($kiosk->secret_hash);
-        $this->assertTrue(app(KioskCredentialService::class)->isEnrolled($kiosk));
+        $this->assertNotNull($kiosk->enrolled_at);
+        $this->assertSame(KioskEnrollmentType::DeviceAgent, $kiosk->enrollment_type);
+        $this->assertTrue(app(KioskCredentialService::class)->hasDeviceAgentCredential($kiosk));
     }
 
     public function test_enrollment_code_cannot_be_reused(): void
@@ -37,7 +40,7 @@ class KioskEnrollmentTest extends TestCase
         config(['kiosk.allowed_networks' => ['127.0.0.1']]);
 
         $enrollment = app(KioskEnrollmentService::class);
-        $kiosk = $enrollment->createKiosk(['name' => 'Lab Kiosk']);
+        $kiosk = $enrollment->createKiosk(['name' => 'Lab Kiosk', 'allowed_ip' => '127.0.0.1']);
         $code = $enrollment->issueEnrollmentCode($kiosk);
 
         $this->postJson(route('kiosk.enroll'), ['enrollment_code' => $code])->assertOk();
@@ -49,7 +52,10 @@ class KioskEnrollmentTest extends TestCase
         config(['kiosk.allowed_networks' => ['127.0.0.1']]);
 
         $enrollment = app(KioskEnrollmentService::class);
-        $kiosk = $enrollment->createKiosk(['name' => 'Browser Kiosk']);
+        $kiosk = $enrollment->createKiosk([
+            'name' => 'Browser Kiosk',
+            'allowed_ip' => '10.10.20.15',
+        ]);
         $code = $enrollment->issueEnrollmentCode($kiosk);
 
         $this->get(route('kiosk.enroll.form'))->assertOk();
@@ -60,6 +66,12 @@ class KioskEnrollmentTest extends TestCase
 
         $response->assertRedirect(route('kiosk.enroll.complete'));
         $response->assertSessionHas(config('kiosk.registration_session_kiosk_key'), $kiosk->id);
-        $response->assertSessionHas('kiosk_secret');
+        $response->assertSessionHas('browser_enrollment', true);
+        $response->assertSessionMissing('kiosk_secret');
+
+        $kiosk->refresh();
+        $this->assertNull($kiosk->secret_hash);
+        $this->assertSame(KioskEnrollmentType::Browser, $kiosk->enrollment_type);
+        $this->assertNotNull($kiosk->enrolled_at);
     }
 }

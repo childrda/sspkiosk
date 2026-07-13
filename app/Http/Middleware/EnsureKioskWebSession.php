@@ -5,7 +5,6 @@ namespace App\Http\Middleware;
 use App\Models\Kiosk;
 use App\Services\AuditLogService;
 use App\Services\KioskNetworkService;
-use App\Services\KioskSecurityService;
 use Closure;
 use Illuminate\Http\Request;
 use Symfony\Component\HttpFoundation\Response;
@@ -13,7 +12,6 @@ use Symfony\Component\HttpFoundation\Response;
 class EnsureKioskWebSession
 {
     public function __construct(
-        private readonly KioskSecurityService $kioskSecurity,
         private readonly KioskNetworkService $networks,
         private readonly AuditLogService $auditLogs,
     ) {}
@@ -21,25 +19,32 @@ class EnsureKioskWebSession
     public function handle(Request $request, Closure $next): Response
     {
         $sessionKey = config('kiosk.registration_session_kiosk_key');
-        $kioskId = $request->session()->get($sessionKey);
+        $ip = $request->ip();
 
-        if (! $kioskId) {
-            $ip = $request->ip();
+        if ($ip === null) {
+            return redirect()
+                ->route('kiosk.reset.unavailable')
+                ->with('error', 'This kiosk is not set up. Please ask technology staff for help.');
+        }
 
-            if ($ip === null) {
-                return redirect()
-                    ->route('kiosk.reset.unavailable')
-                    ->with('error', 'This kiosk is not set up. Please ask technology staff for help.');
-            }
+        $resolvedKiosk = $this->networks->findEnrolledKioskByIp($ip);
+        $sessionKioskId = $request->session()->get($sessionKey);
 
-            $resolvedKiosk = $this->networks->findEnrolledKioskByIp($ip);
+        if ($resolvedKiosk !== null && $sessionKioskId !== null && (int) $sessionKioskId !== $resolvedKiosk->id) {
+            $this->auditLogs->logKiosk(
+                'kiosk.session.ip_mismatch',
+                $resolvedKiosk->id,
+                [
+                    'session_kiosk_id' => (int) $sessionKioskId,
+                    'resolved_kiosk_id' => $resolvedKiosk->id,
+                    'source_ip' => $ip,
+                ],
+                $request,
+            );
 
-            if ($resolvedKiosk === null) {
-                return redirect()
-                    ->route('kiosk.reset.unavailable')
-                    ->with('error', 'This kiosk is not set up. Please ask technology staff for help.');
-            }
-
+            $request->session()->put($sessionKey, $resolvedKiosk->id);
+            $sessionKioskId = $resolvedKiosk->id;
+        } elseif ($resolvedKiosk !== null && $sessionKioskId === null) {
             $request->session()->put($sessionKey, $resolvedKiosk->id);
 
             $this->auditLogs->logKiosk(
@@ -52,10 +57,18 @@ class EnsureKioskWebSession
                 $request,
             );
 
-            $kioskId = $resolvedKiosk->id;
+            $sessionKioskId = $resolvedKiosk->id;
+        } elseif ($resolvedKiosk === null && $sessionKioskId !== null) {
+            return redirect()
+                ->route('kiosk.reset.unavailable')
+                ->with('error', 'This kiosk is not set up. Please ask technology staff for help.');
+        } elseif ($resolvedKiosk === null && $sessionKioskId === null) {
+            return redirect()
+                ->route('kiosk.reset.unavailable')
+                ->with('error', 'This kiosk is not set up. Please ask technology staff for help.');
         }
 
-        $kiosk = Kiosk::query()->find($kioskId);
+        $kiosk = $resolvedKiosk ?? Kiosk::query()->find($sessionKioskId);
 
         if (! $kiosk || ! $kiosk->isActive()) {
             return redirect()
@@ -65,12 +78,6 @@ class EnsureKioskWebSession
 
         if (! $this->networks->isRequestIpAllowed($request, $kiosk)) {
             abort(403, 'Request IP is not allowed.');
-        }
-
-        if (config('kiosk.require_active_heartbeat') && ! $this->kioskSecurity->hasFreshHeartbeat($kiosk)) {
-            return redirect()
-                ->route('kiosk.reset.unavailable')
-                ->with('error', 'This kiosk needs to check in with the server. Please wait a moment and try again.');
         }
 
         $request->attributes->set('kiosk', $kiosk);

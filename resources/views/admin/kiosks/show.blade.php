@@ -12,9 +12,23 @@
     <div class="card">
         <p><strong>UUID:</strong> {{ $kiosk->kiosk_uuid }}</p>
         <p><strong>Status:</strong> {{ $kiosk->status->value }}</p>
-        <p><strong>Enrolled:</strong> {{ $isEnrolled ? 'Yes' : 'No' }}</p>
-        <p><strong>Online:</strong> {{ $isOnline ? 'Yes' : 'No' }}</p>
-        <p><strong>Last heartbeat:</strong> {{ $kiosk->last_seen_at?->toDateTimeString() ?? 'Never' }}</p>
+        <p><strong>Enrolled:</strong> {{ $isEnrolled ? 'Yes' : 'No' }}
+            @if ($kiosk->enrollment_type)
+                ({{ str_replace('_', ' ', $kiosk->enrollment_type->value) }})
+            @endif
+        </p>
+        <p><strong>Last seen:</strong>
+            @if ($kiosk->last_seen_at)
+                {{ $kiosk->last_seen_at->toDateTimeString() }}
+                ({{ $kiosk->last_seen_at->diffForHumans() }})
+                @unless ($lastSeenIsFresh)
+                    <span class="badge badge-expired">stale</span>
+                @endunless
+            @else
+                Never
+            @endif
+        </p>
+        <p class="muted">Last seen is advisory only and does not gate kiosk access.</p>
         <p><strong>Location:</strong> {{ $kiosk->location ?? '—' }}</p>
         <p><strong>Allowed IP:</strong> {{ $kiosk->allowed_ip ?? '—' }}</p>
         <p><strong>Allowed subnet:</strong> {{ $kiosk->allowed_subnet ?? '—' }}</p>
@@ -44,15 +58,22 @@
                     </form>
                 @endif
 
-                @if ($isEnrolled)
+                @if ($isDeviceAgent)
                     <form method="post" action="{{ route('admin.kiosks.rotate-secret', $kiosk) }}" class="inline" onsubmit="return confirm('Rotate secret? The kiosk must be updated with the new secret.');">
                         @csrf
                         <button type="submit" class="btn btn-secondary">Rotate secret</button>
                     </form>
-                @else
+                @elseif (! $isEnrolled)
                     <form method="post" action="{{ route('admin.kiosks.enrollment-code', $kiosk) }}" class="inline">
                         @csrf
                         <button type="submit" class="btn btn-secondary">Issue enrollment code</button>
+                    </form>
+                @endif
+
+                @if ($isEnrolled)
+                    <form method="post" action="{{ route('admin.kiosks.reset-reenrollment', $kiosk) }}" class="inline" onsubmit="return confirm('Clear enrollment so this kiosk can be set up again?');">
+                        @csrf
+                        <button type="submit" class="btn btn-secondary">Reset enrollment</button>
                     </form>
                 @endif
 

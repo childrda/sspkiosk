@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Enums\KioskEnrollmentType;
 use App\Enums\KioskStatus;
 use App\Models\Kiosk;
 use Illuminate\Support\Facades\DB;
@@ -83,7 +84,7 @@ class AdminKioskService
     public function issueEnrollmentCode(Kiosk $kiosk, int $adminUserId): string
     {
         if ($this->credentials->isEnrolled($kiosk)) {
-            throw new \RuntimeException('Kiosk is already enrolled. Rotate the secret before issuing a new enrollment code.');
+            throw new \RuntimeException('Kiosk is already enrolled. Reset enrollment before issuing a new code.');
         }
 
         $code = $this->enrollment->issueEnrollmentCode($kiosk);
@@ -98,12 +99,30 @@ class AdminKioskService
         return $code;
     }
 
+    public function resetReenrollment(Kiosk $kiosk, int $adminUserId): void
+    {
+        $kiosk->update([
+            'enrolled_at' => null,
+            'enrollment_type' => null,
+            'secret_hash' => null,
+        ]);
+
+        $this->auditLog->logAdmin(
+            'admin.kiosk.reenrollment_reset',
+            $adminUserId,
+            'kiosk',
+            (string) $kiosk->id,
+        );
+    }
+
     public function archive(Kiosk $kiosk, int $adminUserId): void
     {
         DB::transaction(function () use ($kiosk, $adminUserId): void {
             $kiosk->update([
                 'status' => KioskStatus::Disabled,
                 'secret_hash' => null,
+                'enrolled_at' => null,
+                'enrollment_type' => null,
             ]);
 
             $kiosk->enrollmentCodes()->delete();
@@ -136,6 +155,11 @@ class AdminKioskService
     }
 
     public function isOnline(Kiosk $kiosk): bool
+    {
+        return $this->lastSeenIsFresh($kiosk);
+    }
+
+    public function lastSeenIsFresh(Kiosk $kiosk): bool
     {
         if ($kiosk->last_seen_at === null) {
             return false;

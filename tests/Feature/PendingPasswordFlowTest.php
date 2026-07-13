@@ -39,17 +39,16 @@ class PendingPasswordFlowTest extends TestCase
 
     private function enrolledKioskSession(): array
     {
-        $credentials = app(KioskCredentialService::class);
-        $secret = $credentials->generateSecret();
-        $kiosk = Kiosk::factory()->create([
-            'secret_hash' => $credentials->encryptSecret($secret),
-            'last_seen_at' => now(),
+        $kiosk = Kiosk::factory()->browserEnrolled()->create([
+            'allowed_ip' => '127.0.0.1',
         ]);
 
-        $headers = $this->kioskAuthHeaders($kiosk, $secret, 'POST', '/kiosk/bind-session');
-        $this->withHeaders($headers)->post(route('kiosk.bind-session'));
+        return [$kiosk, null, [config('kiosk.registration_session_kiosk_key') => $kiosk->id]];
+    }
 
-        return [$kiosk, $secret, [config('kiosk.registration_session_kiosk_key') => $kiosk->id]];
+    private function kioskRequest()
+    {
+        return $this->withServerVariables(['REMOTE_ADDR' => '127.0.0.1']);
     }
 
     public function test_temporary_generated_stores_pending_password_before_approval(): void
@@ -74,7 +73,7 @@ class PendingPasswordFlowTest extends TestCase
     {
         [$kiosk, , $session] = $this->enrolledKioskSession();
 
-        $this->withSession($session)->get(route('kiosk.reset.index'));
+        $this->kioskRequest()->withSession($session)->get(route('kiosk.reset.index'));
         $sessionId = session()->getId();
 
         $resetRequest = PasswordResetRequest::factory()->create([
@@ -89,13 +88,13 @@ class PendingPasswordFlowTest extends TestCase
 
         $session[config('kiosk.active_reset_request_session_key')] = $resetRequest->id;
 
-        $this->withSession($session)
+        $this->kioskRequest()->withSession($session)
             ->get(route('kiosk.reset.pending-password', $resetRequest))
             ->assertOk()
             ->assertSee('Mint-River-4321-Sky')
             ->assertSee('will not work yet', false);
 
-        $this->withSession($session)
+        $this->kioskRequest()->withSession($session)
             ->get(route('kiosk.reset.pending-password', $resetRequest))
             ->assertOk()
             ->assertDontSee('Mint-River-4321-Sky');
@@ -149,7 +148,7 @@ class PendingPasswordFlowTest extends TestCase
         Queue::fake();
         config(['student-password-reset.reset_password_mode' => 'student_selected_pending_approval']);
 
-        [$kiosk, $secret, $session] = $this->enrolledKioskSession();
+        [$kiosk, , $session] = $this->enrolledKioskSession();
         $student = Student::factory()->registered()->create(['email' => 'alex@students.example.org', 'name' => 'Alex Johnson']);
 
         $session[config('kiosk.reset_session_student_key')] = $student->id;
@@ -162,10 +161,7 @@ class PendingPasswordFlowTest extends TestCase
         $session[config('kiosk.reset_session_questions_key')] = [['id' => 1, 'question' => 'Q?']];
         $session[config('kiosk.reset_session_challenge_score_key')] = 3;
 
-        $headers = $this->kioskAuthHeaders($kiosk, $secret, 'POST', '/kiosk/reset/password');
-
-        $this->withSession($session)
-            ->withHeaders($this->kioskAuthHeaders($kiosk, $secret, 'POST', '/kiosk/reset/password'))
+        $this->kioskRequest()->withSession($session)
             ->post(route('kiosk.reset.password.store'), [
                 'password' => 'short',
                 'password_confirmation' => 'short',
@@ -173,8 +169,7 @@ class PendingPasswordFlowTest extends TestCase
             ->assertRedirect()
             ->assertSessionHasErrors('password');
 
-        $this->withSession($session)
-            ->withHeaders($headers)
+        $this->kioskRequest()->withSession($session)
             ->post(route('kiosk.reset.password.store'), [
                 'password' => 'ValidPass-1234',
                 'password_confirmation' => 'ValidPass-1234',

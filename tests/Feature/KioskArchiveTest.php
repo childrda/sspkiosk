@@ -97,6 +97,7 @@ class KioskArchiveTest extends TestCase
 
         $archived = Kiosk::withTrashed()->findOrFail($kiosk->id);
         $this->assertNull($archived->secret_hash);
+        $this->assertNull($archived->enrolled_at);
 
         $body = json_encode(['device_fingerprint' => 'fp-test']);
         $headers = $this->kioskAuthHeaders($kiosk, $secret, 'POST', '/kiosk/heartbeat', [], $body);

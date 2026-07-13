@@ -42,22 +42,21 @@ class LabelPrintingTest extends TestCase
 
     private function enrolledKioskSession(): array
     {
-        $credentials = app(KioskCredentialService::class);
-        $secret = $credentials->generateSecret();
-        $kiosk = Kiosk::factory()->create([
-            'secret_hash' => $credentials->encryptSecret($secret),
-            'last_seen_at' => now(),
+        $kiosk = Kiosk::factory()->browserEnrolled()->create([
+            'allowed_ip' => '127.0.0.1',
         ]);
 
-        $headers = $this->kioskAuthHeaders($kiosk, $secret, 'POST', '/kiosk/bind-session');
-        $this->withHeaders($headers)->post(route('kiosk.bind-session'));
+        return [$kiosk, null, [config('kiosk.registration_session_kiosk_key') => $kiosk->id]];
+    }
 
-        return [$kiosk, $secret, [config('kiosk.registration_session_kiosk_key') => $kiosk->id]];
+    private function kioskRequest()
+    {
+        return $this->withServerVariables(['REMOTE_ADDR' => '127.0.0.1']);
     }
 
     private function printableResetRequest(Kiosk $kiosk, array $session): PasswordResetRequest
     {
-        $this->withSession($session)->get(route('kiosk.reset.index'));
+        $this->kioskRequest()->withSession($session)->get(route('kiosk.reset.index'));
 
         $resetRequest = PasswordResetRequest::factory()->create([
             'kiosk_id' => $kiosk->id,
@@ -78,7 +77,7 @@ class LabelPrintingTest extends TestCase
     {
         $session[config('kiosk.active_reset_request_session_key')] = $resetRequest->id;
 
-        return $this->withSession($session)->post(route('kiosk.reset.print', $resetRequest));
+        return $this->kioskRequest()->withSession($session)->post(route('kiosk.reset.print', $resetRequest));
     }
 
     public function test_print_route_returns_403_when_feature_flag_is_off(): void
@@ -122,8 +121,13 @@ class LabelPrintingTest extends TestCase
 
     public function test_print_post_for_reset_request_from_different_kiosk_session_returns_403(): void
     {
+        config(['kiosk.allowed_networks' => ['127.0.0.0/24']]);
+
         [$kioskA, , $sessionA] = $this->enrolledKioskSession();
-        [, , $sessionB] = $this->enrolledKioskSession();
+        $kioskB = Kiosk::factory()->browserEnrolled()->create([
+            'allowed_ip' => '127.0.0.2',
+        ]);
+        $sessionB = [config('kiosk.registration_session_kiosk_key') => $kioskB->id];
 
         $resetRequest = PasswordResetRequest::factory()->create([
             'kiosk_id' => $kioskA->id,
@@ -132,7 +136,8 @@ class LabelPrintingTest extends TestCase
             'pending_password_displayed_at' => now(),
         ]);
 
-        $this->withSession($sessionB)
+        $this->withServerVariables(['REMOTE_ADDR' => '127.0.0.2'])
+            ->withSession($sessionB)
             ->post(route('kiosk.reset.print', $resetRequest))
             ->assertForbidden();
     }

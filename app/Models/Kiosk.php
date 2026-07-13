@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Enums\KioskEnrollmentType;
 use App\Enums\KioskStatus;
 use Database\Factories\KioskFactory;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
@@ -24,6 +25,8 @@ class Kiosk extends Model
         'allowed_ip',
         'allowed_subnet',
         'secret_hash',
+        'enrolled_at',
+        'enrollment_type',
         'last_seen_at',
     ];
 
@@ -32,6 +35,8 @@ class Kiosk extends Model
         return [
             'kiosk_uuid' => 'string',
             'status' => KioskStatus::class,
+            'enrolled_at' => 'datetime',
+            'enrollment_type' => KioskEnrollmentType::class,
             'last_seen_at' => 'datetime',
         ];
     }

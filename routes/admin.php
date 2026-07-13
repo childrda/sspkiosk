@@ -45,6 +45,8 @@ Route::middleware('web')->prefix($prefix)->name('admin.')->group(function () {
             ->name('kiosks.rotate-secret');
         Route::post('kiosks/{kiosk}/enrollment-code', [KioskController::class, 'issueEnrollmentCode'])
             ->name('kiosks.enrollment-code');
+        Route::post('kiosks/{kiosk}/reset-reenrollment', [KioskController::class, 'resetReenrollment'])
+            ->name('kiosks.reset-reenrollment');
         Route::get('kiosks/{kiosk}/provisioning-bundle', [KioskController::class, 'provisioningBundle'])
             ->name('kiosks.provisioning-bundle');
         Route::delete('kiosks/{kiosk}', [KioskController::class, 'destroy'])->name('kiosks.destroy');

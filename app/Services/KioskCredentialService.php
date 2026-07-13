@@ -20,14 +20,19 @@ class KioskCredentialService
 
     public function decryptSecret(Kiosk $kiosk): string
     {
-        if ($kiosk->secret_hash === null || $kiosk->secret_hash === '') {
-            throw new \RuntimeException('Kiosk is not enrolled.');
+        if (! $this->hasDeviceAgentCredential($kiosk)) {
+            throw new \RuntimeException('Kiosk is not enrolled with a device agent credential.');
         }
 
         return Crypt::decryptString($kiosk->secret_hash);
     }
 
     public function isEnrolled(Kiosk $kiosk): bool
+    {
+        return $kiosk->enrolled_at !== null;
+    }
+
+    public function hasDeviceAgentCredential(Kiosk $kiosk): bool
     {
         return $kiosk->secret_hash !== null && $kiosk->secret_hash !== '';
     }

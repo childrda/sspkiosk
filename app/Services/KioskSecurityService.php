@@ -115,7 +115,7 @@ class KioskSecurityService
             throw new KioskAuthenticationException('Kiosk is disabled.', 'kiosk_disabled');
         }
 
-        if (! $this->credentials->isEnrolled($kiosk)) {
+        if (! $this->credentials->hasDeviceAgentCredential($kiosk)) {
             throw new KioskAuthenticationException('Kiosk is not enrolled.', 'kiosk_not_enrolled');
         }
 

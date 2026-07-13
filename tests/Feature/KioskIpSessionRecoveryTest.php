@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Enums\KioskEnrollmentType;
 use App\Enums\KioskStatus;
 use App\Models\AuditLog;
 use App\Models\Kiosk;
@@ -16,7 +17,6 @@ class KioskIpSessionRecoveryTest extends TestCase
     private function configureKioskReset(): void
     {
         config([
-            'kiosk.require_active_heartbeat' => false,
             'kiosk.allowed_networks' => [],
             'student-password-reset.reset_password_mode' => 'temporary_generated',
         ]);
@@ -24,11 +24,7 @@ class KioskIpSessionRecoveryTest extends TestCase
 
     private function enrolledKiosk(array $attributes = []): Kiosk
     {
-        $credentials = app(KioskCredentialService::class);
-
-        return Kiosk::factory()->create(array_merge([
-            'secret_hash' => $credentials->encryptSecret($credentials->generateSecret()),
-            'last_seen_at' => now(),
+        return Kiosk::factory()->enrolled()->create(array_merge([
             'status' => KioskStatus::Active,
         ], $attributes));
     }
@@ -94,13 +90,13 @@ class KioskIpSessionRecoveryTest extends TestCase
         $response->assertSessionMissing(config('kiosk.registration_session_kiosk_key'));
     }
 
-    public function test_unenrolled_kiosk_with_null_secret_is_not_resolved_from_ip(): void
+    public function test_kiosk_without_enrolled_at_is_not_resolved_from_ip(): void
     {
         $this->configureKioskReset();
 
         Kiosk::factory()->create([
             'allowed_ip' => '10.10.20.15',
-            'secret_hash' => null,
+            'enrolled_at' => null,
             'status' => KioskStatus::Active,
         ]);
 
@@ -110,23 +106,7 @@ class KioskIpSessionRecoveryTest extends TestCase
         $response->assertSessionMissing(config('kiosk.registration_session_kiosk_key'));
     }
 
-    public function test_unenrolled_kiosk_with_empty_secret_is_not_resolved_from_ip(): void
-    {
-        $this->configureKioskReset();
-
-        Kiosk::factory()->create([
-            'allowed_ip' => '10.10.20.15',
-            'secret_hash' => '',
-            'status' => KioskStatus::Active,
-        ]);
-
-        $response = $this->getResetIndexFromIp('10.10.20.15');
-
-        $response->assertRedirect(route('kiosk.reset.unavailable'));
-        $response->assertSessionMissing(config('kiosk.registration_session_kiosk_key'));
-    }
-
-    public function test_already_seeded_session_is_not_replaced_by_ip_fallback(): void
+    public function test_session_bound_to_kiosk_a_rebinds_when_request_arrives_from_kiosk_b_ip(): void
     {
         $this->configureKioskReset();
 
@@ -135,7 +115,7 @@ class KioskIpSessionRecoveryTest extends TestCase
             'allowed_subnet' => '10.10.20.0/24',
             'name' => 'Kiosk A',
         ]);
-        $this->enrolledKiosk([
+        $kioskB = $this->enrolledKiosk([
             'allowed_ip' => '10.10.20.20',
             'allowed_subnet' => null,
             'name' => 'Kiosk B',
@@ -148,9 +128,9 @@ class KioskIpSessionRecoveryTest extends TestCase
             ->get(route('kiosk.reset.index'));
 
         $response->assertOk();
-        $response->assertSessionHas($sessionKey, $kioskA->id);
-        $this->assertFalse(
-            AuditLog::query()->where('action', 'kiosk.session.ip_resolved')->exists(),
+        $response->assertSessionHas($sessionKey, $kioskB->id);
+        $this->assertTrue(
+            AuditLog::query()->where('action', 'kiosk.session.ip_mismatch')->exists(),
         );
     }
 

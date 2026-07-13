@@ -20,7 +20,7 @@ class StoreKioskRequest extends FormRequest
             'name' => ['required', 'string', 'max:255'],
             'school' => ['nullable', 'string', 'max:255'],
             'location' => ['nullable', 'string', 'max:255'],
-            'allowed_ip' => ['nullable', 'ip'],
+            'allowed_ip' => ['required', 'ip'],
             'allowed_subnet' => ['nullable', 'string', 'max:64'],
         ];
     }

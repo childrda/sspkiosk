@@ -23,6 +23,9 @@ class KioskSecurityTest extends TestCase
 
         $kiosk = Kiosk::factory()->create([
             'secret_hash' => $credentials->encryptSecret($secret),
+            'enrolled_at' => now(),
+            'enrollment_type' => \App\Enums\KioskEnrollmentType::DeviceAgent,
+            'allowed_ip' => '127.0.0.1',
             'last_seen_at' => now(),
         ]);
 

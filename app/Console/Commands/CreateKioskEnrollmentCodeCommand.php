@@ -22,8 +22,8 @@ class CreateKioskEnrollmentCodeCommand extends Command
             return self::FAILURE;
         }
 
-        if ($kiosk->secret_hash !== null) {
-            $this->warn('This kiosk is already enrolled. Rotate the secret from the admin dashboard (Phase 9) before re-enrolling.');
+        if ($kiosk->enrolled_at !== null) {
+            $this->warn('This kiosk is already enrolled. Reset enrollment from the admin dashboard before re-enrolling.');
         }
 
         $code = $enrollment->issueEnrollmentCode($kiosk);

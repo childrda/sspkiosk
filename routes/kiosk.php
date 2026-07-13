@@ -22,6 +22,11 @@ Route::prefix('kiosk')->group(function () {
             ->name('kiosk.enroll.complete');
     });
 
+    Route::middleware(['web', EnsureKioskWebSession::class])->group(function () {
+        Route::post('/session-heartbeat', [KioskHeartbeatController::class, 'sessionHeartbeat'])
+            ->name('kiosk.session-heartbeat');
+    });
+
     Route::middleware(ValidateKioskRequest::class)->group(function () {
         Route::post('/heartbeat', [KioskHeartbeatController::class, 'store'])->name('kiosk.heartbeat');
     });
