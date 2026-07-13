@@ -44,4 +44,33 @@ class ConfigurationValidatorServiceTest extends TestCase
         $this->assertArrayHasKey('student-password-reset', $missing);
         $this->assertContains('RESET_PASSWORD_MODE', $missing['student-password-reset']);
     }
+
+    public function test_kiosk_reset_rejects_localhost_app_url(): void
+    {
+        config(['app.url' => 'http://localhost']);
+
+        $missing = (new ConfigurationValidatorService)->missingInvalidAppUrl();
+
+        $this->assertArrayHasKey('app', $missing);
+        $this->assertContains('APP_URL (must use https)', $missing['app']);
+    }
+
+    public function test_kiosk_reset_rejects_http_app_url(): void
+    {
+        config(['app.url' => 'http://kiosk.example.org']);
+
+        $missing = (new ConfigurationValidatorService)->missingInvalidAppUrl();
+
+        $this->assertArrayHasKey('app', $missing);
+        $this->assertContains('APP_URL (must use https)', $missing['app']);
+    }
+
+    public function test_kiosk_reset_accepts_https_production_app_url(): void
+    {
+        config(['app.url' => 'https://kiosk.example.org']);
+
+        $missing = (new ConfigurationValidatorService)->missingInvalidAppUrl();
+
+        $this->assertSame([], $missing);
+    }
 }

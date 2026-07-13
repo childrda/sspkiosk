@@ -4,9 +4,23 @@
 from __future__ import annotations
 
 import hashlib
-import hmac
-import json
+import importlib.machinery
+import importlib.util
 import unittest
+from pathlib import Path
+
+_spec = importlib.util.spec_from_loader(
+    "sspkiosk_agent",
+    importlib.machinery.SourceFileLoader(
+        "sspkiosk_agent", str(Path(__file__).parent / "sspkiosk-agent")
+    ),
+)
+agent = importlib.util.module_from_spec(_spec)
+assert _spec.loader is not None
+_spec.loader.exec_module(agent)
+
+build_canonical = agent.build_canonical
+sign = agent.sign
 
 # Generated from PHP KioskSecurityService::buildCanonicalPayload + signPayload
 GOLDEN_UUID = "550e8400-e29b-41d4-a716-446655440000"
@@ -17,23 +31,6 @@ GOLDEN_PATH = "/kiosk/heartbeat"
 GOLDEN_BODY = b'{"device_fingerprint":"abc123"}'
 GOLDEN_SECRET = "test-secret-key-for-golden-vector"
 GOLDEN_SIGNATURE = "97f8556f7ecf7b9da0764c4f96d8d130970ed89ccc82e6103d92e7e6ec7093dd"
-
-
-def build_canonical(
-    kiosk_uuid: str,
-    timestamp: str,
-    nonce: str,
-    method: str,
-    path: str,
-    body_bytes: bytes,
-) -> str:
-    body_hash = hashlib.sha256(body_bytes).hexdigest()
-    path_value = "/" + path.lstrip("/")
-    return "\n".join([kiosk_uuid, timestamp, nonce, method.upper(), path_value, body_hash])
-
-
-def sign(canonical: str, secret: str) -> str:
-    return hmac.new(secret.encode("utf-8"), canonical.encode("utf-8"), hashlib.sha256).hexdigest()
 
 
 class SigningGoldenVectorTest(unittest.TestCase):

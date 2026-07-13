@@ -205,20 +205,6 @@ def redacted_canonical(config: dict[str, str], body_bytes: bytes) -> str:
     return canonical.replace(config["SSPKIOSK_SECRET"], "[REDACTED]")
 
 
-def attempt_timesync() -> None:
-    if not shutil_which("timedatectl"):
-        return
-    os.system("timedatectl set-ntp true >/dev/null 2>&1")
-
-
-def shutil_which(command: str) -> str | None:
-    for path_dir in os.environ.get("PATH", "").split(os.pathsep):
-        candidate = Path(path_dir) / command
-        if candidate.is_file() and os.access(candidate, os.X_OK):
-            return str(candidate)
-    return None
-
-
 def local_ip_address() -> str:
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
@@ -277,11 +263,10 @@ def run_daemon(config: dict[str, str]) -> int:
 
         if reason == "timestamp_expired":
             logging.error(
-                "timestamp_expired local_time=%s server_date=%s",
+                "timestamp_expired local_time=%s server_date=%s fix=enable_os_ntp",
                 time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                 result.get("date_header", ""),
             )
-            attempt_timesync()
             sleep_with_jitter(backoff)
             backoff = min(interval, backoff * 2)
             continue
@@ -303,7 +288,11 @@ def run_daemon(config: dict[str, str]) -> int:
             continue
 
         if reason == "ip_not_allowed":
-            logging.error("ip_not_allowed local_ip=%s", local_ip_address())
+            logging.error(
+                "ip_not_allowed local_ip=%s kiosk_uuid=%s",
+                local_ip_address(),
+                config["SSPKIOSK_KIOSK_UUID"],
+            )
             time.sleep(ADMIN_STATE_INTERVAL)
             continue
 

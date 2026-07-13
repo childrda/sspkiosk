@@ -88,7 +88,37 @@ class ConfigurationValidatorService
             }
         }
 
-        return $missing;
+        return array_merge($missing, $this->missingInvalidAppUrl());
+    }
+
+    /**
+     * @return array<string, list<string>>
+     */
+    public function missingInvalidAppUrl(): array
+    {
+        $url = trim((string) config('app.url'));
+
+        if ($url === '') {
+            return ['app' => ['APP_URL']];
+        }
+
+        $parsed = parse_url($url);
+
+        if ($parsed === false || ! isset($parsed['scheme'], $parsed['host'])) {
+            return ['app' => ['APP_URL (must be a valid URL)']];
+        }
+
+        if (strtolower($parsed['scheme']) !== 'https') {
+            return ['app' => ['APP_URL (must use https)']];
+        }
+
+        $host = strtolower($parsed['host']);
+
+        if (in_array($host, ['localhost', '127.0.0.1', '::1'], true) || str_ends_with($host, '.localhost')) {
+            return ['app' => ['APP_URL (must not be localhost)']];
+        }
+
+        return [];
     }
 
     /**
