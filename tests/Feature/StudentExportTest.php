@@ -106,7 +106,8 @@ class StudentExportTest extends TestCase
             ->assertOk()
             ->assertSee('newkid@students.example.org')
             ->assertSee('withdrawn@students.example.org')
-            ->assertSee('In both:</strong> 1', false);
+            ->assertSee('In both:</strong> 1', false)
+            ->assertSessionMissing('roster_comparison');
 
         $this->assertTrue(
             AuditLog::query()->where('action', 'admin.students.roster_compared')->exists(),

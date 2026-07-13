@@ -325,9 +325,7 @@ class KioskResetController extends Controller
             abort(403);
         }
 
-        if ($response = $this->authorizeResetRequestAccess($request, $resetRequest)) {
-            abort(403);
-        }
+        $this->authorizeResetRequestAccess($request, $resetRequest);
 
         $resetRequest->refresh();
 

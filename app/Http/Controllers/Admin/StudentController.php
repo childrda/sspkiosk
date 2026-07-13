@@ -149,8 +149,6 @@ class StudentController extends Controller
 
         $comparison = $this->rosterComparison->compare($file);
 
-        $request->session()->put('roster_comparison', $comparison);
-
         $this->auditLog->logAdmin(
             'admin.students.roster_compared',
             (int) $request->user()->id,
@@ -166,49 +164,6 @@ class StudentController extends Controller
 
         return view('admin.students.roster-compare-results', [
             'comparison' => $comparison,
-        ]);
-    }
-
-    public function downloadRosterCompareBucket(Request $request, string $bucket): StreamedResponse
-    {
-        $comparison = $request->session()->get('roster_comparison');
-
-        if (! is_array($comparison)) {
-            abort(404);
-        }
-
-        $rows = match ($bucket) {
-            'in_roster_not_registered' => $comparison['in_roster_not_registered'] ?? null,
-            'registered_not_in_roster' => $comparison['registered_not_in_roster'] ?? null,
-            default => null,
-        };
-
-        if (! is_array($rows)) {
-            abort(404);
-        }
-
-        $filename = $bucket.'-'.now()->format('Y-m-d').'.csv';
-
-        return response()->streamDownload(function () use ($rows, $bucket): void {
-            $handle = fopen('php://output', 'w');
-
-            if ($bucket === 'in_roster_not_registered') {
-                fputcsv($handle, ['email', 'name']);
-
-                foreach ($rows as $row) {
-                    fputcsv($handle, [$row['email'], $row['name']]);
-                }
-            } else {
-                fputcsv($handle, ['email', 'name', 'school', 'grade']);
-
-                foreach ($rows as $row) {
-                    fputcsv($handle, [$row['email'], $row['name'], $row['school'], $row['grade']]);
-                }
-            }
-
-            fclose($handle);
-        }, $filename, [
-            'Content-Type' => 'text/csv',
         ]);
     }
 

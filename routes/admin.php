@@ -58,8 +58,6 @@ Route::middleware('web')->prefix($prefix)->name('admin.')->group(function () {
             ->name('students.roster-compare');
         Route::post('students/roster-compare', [StudentController::class, 'rosterCompare'])
             ->name('students.roster-compare.run');
-        Route::get('students/roster-compare/download/{bucket}', [StudentController::class, 'downloadRosterCompareBucket'])
-            ->name('students.roster-compare.download');
         Route::get('students/{student}', [StudentController::class, 'show'])->name('students.show');
         Route::post('students/{student}/disable-reset', [StudentController::class, 'disableReset'])
             ->name('students.disable-reset');
