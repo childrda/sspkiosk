@@ -44,7 +44,7 @@ class KioskEnrollmentTest extends TestCase
         $this->postJson(route('kiosk.enroll'), ['enrollment_code' => $code])->assertUnauthorized();
     }
 
-    public function test_browser_enrollment_sets_session_and_redirects_to_reset(): void
+    public function test_browser_enrollment_sets_session_and_redirects_to_complete_page(): void
     {
         config(['kiosk.allowed_networks' => ['127.0.0.1']]);
 
@@ -58,7 +58,8 @@ class KioskEnrollmentTest extends TestCase
             'enrollment_code' => $code,
         ]);
 
-        $response->assertRedirect(route('kiosk.reset.index'));
+        $response->assertRedirect(route('kiosk.enroll.complete'));
         $response->assertSessionHas(config('kiosk.registration_session_kiosk_key'), $kiosk->id);
+        $response->assertSessionHas('kiosk_secret');
     }
 }

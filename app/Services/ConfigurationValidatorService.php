@@ -79,6 +79,15 @@ class ConfigurationValidatorService
             $missing['student-password-reset'][] = 'RESET_PASSWORD_MODE';
         }
 
+        if (config('kiosk.require_active_heartbeat')) {
+            $interval = (int) config('kiosk.heartbeat_interval_seconds');
+            $expires = (int) config('kiosk.heartbeat_expires_after_seconds');
+
+            if ($expires < $interval * 3) {
+                $missing['kiosk'][] = 'KIOSK_HEARTBEAT_EXPIRES_AFTER_SECONDS (must be at least 3× KIOSK_HEARTBEAT_INTERVAL_SECONDS)';
+            }
+        }
+
         return $missing;
     }
 

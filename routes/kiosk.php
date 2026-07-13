@@ -17,6 +17,9 @@ Route::prefix('kiosk')->group(function () {
         Route::post('/enroll', [KioskEnrollmentController::class, 'enroll'])
             ->middleware('throttle:kiosk-enroll')
             ->name('kiosk.enroll');
+
+        Route::get('/enroll/complete', [KioskEnrollmentController::class, 'showEnrollComplete'])
+            ->name('kiosk.enroll.complete');
     });
 
     Route::middleware(ValidateKioskRequest::class)->group(function () {

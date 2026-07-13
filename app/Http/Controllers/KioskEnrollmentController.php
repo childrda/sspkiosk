@@ -7,6 +7,7 @@ use App\Http\Requests\KioskEnrollRequest;
 use App\Services\AuditLogService;
 use App\Services\KioskEnrollmentService;
 use App\Services\KioskNetworkService;
+use App\Services\KioskProvisioningService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\View\View;
@@ -74,8 +75,28 @@ class KioskEnrollmentController extends Controller
         );
 
         return redirect()
-            ->route('kiosk.reset.index')
-            ->with('success', 'Kiosk enrolled successfully. Store the device secret securely — it is not shown again in the browser.');
+            ->route('kiosk.enroll.complete')
+            ->with('kiosk_secret', $result['secret'])
+            ->with('kiosk_secret_for', $result['kiosk_id'])
+            ->with('enrolled_kiosk_uuid', $result['kiosk_uuid']);
+    }
+
+    public function showEnrollComplete(): View|RedirectResponse
+    {
+        if (! session()->has('kiosk_secret')) {
+            return redirect()
+                ->route('kiosk.enroll.form')
+                ->with('error', 'No enrollment secret is available. Complete enrollment first.');
+        }
+
+        return view('kiosk.enroll-complete', [
+            'kioskSecret' => session('kiosk_secret'),
+            'kioskUuid' => session('enrolled_kiosk_uuid'),
+            'agentConfig' => app(KioskProvisioningService::class)->buildAgentConfigIni(
+                (string) session('enrolled_kiosk_uuid'),
+                (string) session('kiosk_secret'),
+            ),
+        ]);
     }
 
     private function enrollmentFailureResponse(

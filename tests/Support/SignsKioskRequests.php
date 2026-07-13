@@ -40,4 +40,24 @@ trait SignsKioskRequests
             KioskSecurityService::HEADER_SIGNATURE => $signature,
         ];
     }
+
+    /**
+     * @return array<string, string>
+     */
+    protected function kioskHeartbeatHeaders(Kiosk $kiosk, string $secret, array $payload): array
+    {
+        $body = json_encode($payload, JSON_THROW_ON_ERROR);
+
+        return $this->kioskAuthHeaders($kiosk, $secret, 'POST', '/kiosk/heartbeat', [], $body);
+    }
+
+    protected function postSignedKioskRequest(array $headers, string $body): \Illuminate\Testing\TestResponse
+    {
+        $server = $this->transformHeadersToServerVars(array_merge($headers, [
+            'CONTENT_TYPE' => 'application/json',
+            'HTTP_ACCEPT' => 'application/json',
+        ]));
+
+        return $this->call('POST', route('kiosk.heartbeat'), [], [], [], $server, $body);
+    }
 }

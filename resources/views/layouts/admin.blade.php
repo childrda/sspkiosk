@@ -119,6 +119,11 @@
         @if (session('kiosk_secret'))
             <div class="flash flash-secret">
                 <strong>Kiosk secret (shown once):</strong> {{ session('kiosk_secret') }}
+                @if (session('kiosk_secret_for') && isset($kiosk) && (int) session('kiosk_secret_for') === $kiosk->id)
+                    <div style="margin-top:0.5rem;">
+                        <a class="btn btn-secondary" href="{{ route('admin.kiosks.provisioning-bundle', $kiosk) }}">Download agent.conf</a>
+                    </div>
+                @endif
             </div>
         @endif
         @yield('content')

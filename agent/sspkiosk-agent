@@ -1,0 +1,402 @@
+#!/usr/bin/env python3
+"""SSP Kiosk heartbeat agent — stdlib only."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import hmac
+import json
+import logging
+import os
+import random
+import signal
+import socket
+import sys
+import time
+import urllib.error
+import urllib.request
+import uuid
+from pathlib import Path
+from typing import Any
+
+CONFIG_PATH = Path("/etc/sspkiosk/agent.conf")
+DEFAULT_INTERVAL = 60
+BACKOFF_BASE_SECONDS = 5
+INVALID_SIGNATURE_INTERVAL = 300
+ADMIN_STATE_INTERVAL = 300
+
+_shutdown = False
+
+
+def configure_logging() -> None:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s level=%(levelname)s msg=%(message)s",
+    )
+
+
+def build_canonical(
+    kiosk_uuid: str,
+    timestamp: str,
+    nonce: str,
+    method: str,
+    path: str,
+    body_bytes: bytes,
+) -> str:
+    body_hash = hashlib.sha256(body_bytes).hexdigest()
+    path_value = "/" + path.lstrip("/")
+    return "\n".join([kiosk_uuid, timestamp, nonce, method.upper(), path_value, body_hash])
+
+
+def sign(canonical: str, secret: str) -> str:
+    return hmac.new(secret.encode("utf-8"), canonical.encode("utf-8"), hashlib.sha256).hexdigest()
+
+
+def load_config(path: Path = CONFIG_PATH) -> dict[str, str]:
+    values: dict[str, str] = {}
+
+    if path.is_file():
+        for line in path.read_text(encoding="utf-8").splitlines():
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            if "=" not in stripped:
+                continue
+            key, value = stripped.split("=", 1)
+            values[key.strip().upper()] = value.strip()
+
+    for key in (
+        "SSPKIOSK_SERVER_URL",
+        "SSPKIOSK_KIOSK_UUID",
+        "SSPKIOSK_SECRET",
+        "SSPKIOSK_HEARTBEAT_INTERVAL",
+    ):
+        env_value = os.environ.get(key)
+        if env_value is not None and env_value != "":
+            values[key] = env_value
+
+    missing = [key for key in ("SSPKIOSK_SERVER_URL", "SSPKIOSK_KIOSK_UUID", "SSPKIOSK_SECRET") if not values.get(key)]
+    if missing:
+        raise SystemExit(f"Missing required configuration: {', '.join(missing)}")
+
+    return values
+
+
+def write_config(path: Path, server_url: str, kiosk_uuid: str, secret: str, interval: int) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    content = "\n".join(
+        [
+            "# /etc/sspkiosk/agent.conf",
+            f"SSPKIOSK_SERVER_URL={server_url.rstrip('/')}",
+            f"SSPKIOSK_KIOSK_UUID={kiosk_uuid}",
+            f"SSPKIOSK_SECRET={secret}",
+            f"SSPKIOSK_HEARTBEAT_INTERVAL={interval}",
+            "",
+        ]
+    )
+    path.write_text(content, encoding="utf-8")
+    os.chmod(path, 0o600)
+
+
+def primary_mac_address() -> str:
+    try:
+        import fcntl  # type: ignore[import-not-found]
+
+        for iface in sorted(os.listdir("/sys/class/net")):
+            if iface == "lo":
+                continue
+            address_path = Path(f"/sys/class/net/{iface}/address")
+            if address_path.is_file():
+                mac = address_path.read_text(encoding="utf-8").strip()
+                if mac and mac != "00:00:00:00:00:00":
+                    return mac
+    except OSError:
+        pass
+
+    node = uuid.getnode()
+    return ":".join(f"{(node >> shift) & 0xFF:02x}" for shift in range(40, -1, -8))
+
+
+def device_fingerprint() -> str:
+    machine_id = ""
+    machine_id_path = Path("/etc/machine-id")
+    if machine_id_path.is_file():
+        machine_id = machine_id_path.read_text(encoding="utf-8").strip()
+    material = f"{machine_id}:{primary_mac_address()}".encode("utf-8")
+    return hashlib.sha256(material).hexdigest()
+
+
+def signed_request(
+    config: dict[str, str],
+    method: str,
+    path: str,
+    body_bytes: bytes,
+) -> tuple[urllib.request.Request, str]:
+    kiosk_uuid = config["SSPKIOSK_KIOSK_UUID"]
+    secret = config["SSPKIOSK_SECRET"]
+    timestamp = str(int(time.time()))
+    nonce = str(uuid.uuid4())
+    canonical = build_canonical(kiosk_uuid, timestamp, nonce, method, path, body_bytes)
+    signature = sign(canonical, secret)
+
+    url = config["SSPKIOSK_SERVER_URL"].rstrip("/") + path
+    request = urllib.request.Request(url, data=body_bytes, method=method)
+    request.add_header("X-Kiosk-Id", kiosk_uuid)
+    request.add_header("X-Kiosk-Timestamp", timestamp)
+    request.add_header("X-Kiosk-Nonce", nonce)
+    request.add_header("X-Kiosk-Signature", signature)
+    if body_bytes:
+        request.add_header("Content-Type", "application/json")
+    return request, nonce
+
+
+def parse_error_response(body: bytes) -> tuple[str, str]:
+    try:
+        payload = json.loads(body.decode("utf-8"))
+        return str(payload.get("message", "")), str(payload.get("reason", ""))
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return body.decode("utf-8", errors="replace"), ""
+
+
+def send_heartbeat(config: dict[str, str]) -> tuple[bool, dict[str, Any]]:
+    body = json.dumps({"device_fingerprint": device_fingerprint()}, separators=(",", ":")).encode("utf-8")
+    request, nonce = signed_request(config, "POST", "/kiosk/heartbeat", body)
+
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+            return True, {
+                "status_code": response.status,
+                "payload": payload,
+                "date_header": response.headers.get("Date", ""),
+                "nonce": nonce,
+            }
+    except urllib.error.HTTPError as error:
+        message, reason = parse_error_response(error.read())
+        return False, {
+            "status_code": error.code,
+            "message": message,
+            "reason": reason,
+            "date_header": error.headers.get("Date", ""),
+            "nonce": nonce,
+        }
+    except urllib.error.URLError as error:
+        return False, {
+            "status_code": 0,
+            "message": str(error.reason),
+            "reason": "network_error",
+            "date_header": "",
+            "nonce": nonce,
+        }
+
+
+def redacted_canonical(config: dict[str, str], body_bytes: bytes) -> str:
+    timestamp = str(int(time.time()))
+    nonce = str(uuid.uuid4())
+    canonical = build_canonical(
+        config["SSPKIOSK_KIOSK_UUID"],
+        timestamp,
+        nonce,
+        "POST",
+        "/kiosk/heartbeat",
+        body_bytes,
+    )
+    return canonical.replace(config["SSPKIOSK_SECRET"], "[REDACTED]")
+
+
+def attempt_timesync() -> None:
+    if not shutil_which("timedatectl"):
+        return
+    os.system("timedatectl set-ntp true >/dev/null 2>&1")
+
+
+def shutil_which(command: str) -> str | None:
+    for path_dir in os.environ.get("PATH", "").split(os.pathsep):
+        candidate = Path(path_dir) / command
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return str(candidate)
+    return None
+
+
+def local_ip_address() -> str:
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            sock.connect(("8.8.8.8", 80))
+            return sock.getsockname()[0]
+    except OSError:
+        return "unknown"
+
+
+def handle_shutdown(signum: int, _frame: Any) -> None:
+    global _shutdown
+    logging.info("signal=%s received; shutting down", signum)
+    _shutdown = True
+
+
+def sleep_with_jitter(interval: int) -> None:
+    jitter = interval * random.uniform(-0.1, 0.1)
+    time.sleep(max(1.0, interval + jitter))
+
+
+def run_daemon(config: dict[str, str]) -> int:
+    interval = int(config.get("SSPKIOSK_HEARTBEAT_INTERVAL", DEFAULT_INTERVAL))
+    backoff = BACKOFF_BASE_SECONDS
+
+    signal.signal(signal.SIGTERM, handle_shutdown)
+    signal.signal(signal.SIGINT, handle_shutdown)
+
+    logging.info(
+        "agent_start kiosk_uuid=%s interval=%s fingerprint=%s",
+        config["SSPKIOSK_KIOSK_UUID"],
+        interval,
+        device_fingerprint(),
+    )
+
+    while not _shutdown:
+        ok, result = send_heartbeat(config)
+        if ok:
+            backoff = BACKOFF_BASE_SECONDS
+            server_interval = result["payload"].get("heartbeat_interval_seconds")
+            if isinstance(server_interval, int) and server_interval > 0 and server_interval != interval:
+                logging.info("interval_adopted old=%s new=%s", interval, server_interval)
+                interval = server_interval
+            logging.info("heartbeat_ok status=%s", result["status_code"])
+            sleep_with_jitter(interval)
+            continue
+
+        reason = result.get("reason", "")
+        status_code = result.get("status_code", 0)
+        logging.warning(
+            "heartbeat_failed status=%s reason=%s nonce=%s message=%s",
+            status_code,
+            reason or "unknown",
+            result.get("nonce", ""),
+            result.get("message", ""),
+        )
+
+        if reason == "timestamp_expired":
+            logging.error(
+                "timestamp_expired local_time=%s server_date=%s",
+                time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                result.get("date_header", ""),
+            )
+            attempt_timesync()
+            sleep_with_jitter(backoff)
+            backoff = min(interval, backoff * 2)
+            continue
+
+        if reason == "invalid_signature":
+            logging.error("invalid_signature fatal_config_error retry_interval=%s", INVALID_SIGNATURE_INTERVAL)
+            time.sleep(INVALID_SIGNATURE_INTERVAL)
+            continue
+
+        if reason == "nonce_reused":
+            logging.error("nonce_reused possible_cloned_disk_image kiosk_uuid=%s", config["SSPKIOSK_KIOSK_UUID"])
+            sleep_with_jitter(backoff)
+            backoff = min(interval, backoff * 2)
+            continue
+
+        if reason in {"kiosk_disabled", "kiosk_not_enrolled"}:
+            logging.warning("kiosk_state reason=%s retry_interval=%s", reason, ADMIN_STATE_INTERVAL)
+            time.sleep(ADMIN_STATE_INTERVAL)
+            continue
+
+        if reason == "ip_not_allowed":
+            logging.error("ip_not_allowed local_ip=%s", local_ip_address())
+            time.sleep(ADMIN_STATE_INTERVAL)
+            continue
+
+        if status_code >= 500 or reason == "network_error":
+            sleep_with_jitter(backoff)
+            backoff = min(interval, backoff * 2)
+            continue
+
+        sleep_with_jitter(backoff)
+        backoff = min(interval, backoff * 2)
+
+    logging.info("agent_stop")
+    return 0
+
+
+def cmd_check(config: dict[str, str]) -> int:
+    body = json.dumps({"device_fingerprint": device_fingerprint()}, separators=(",", ":")).encode("utf-8")
+    ok, result = send_heartbeat(config)
+    print(f"status={'ok' if ok else 'failed'}")
+    print(f"http_status={result.get('status_code')}")
+    print(f"reason={result.get('reason', '')}")
+    print(f"local_time={time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())}")
+    print(f"server_date={result.get('date_header', '')}")
+    print(f"canonical={redacted_canonical(config, body)}")
+    if ok:
+        print(f"heartbeat_interval_seconds={result['payload'].get('heartbeat_interval_seconds')}")
+        print(f"last_seen_at={result['payload'].get('last_seen_at')}")
+        return 0
+    print(f"message={result.get('message', '')}")
+    return 1
+
+
+def cmd_enroll(server_url: str, code: str, config_path: Path) -> int:
+    payload = json.dumps({"enrollment_code": code}).encode("utf-8")
+    request = urllib.request.Request(
+        server_url.rstrip("/") + "/kiosk/enroll",
+        data=payload,
+        method="POST",
+        headers={
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+        },
+    )
+
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            data = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as error:
+        message, reason = parse_error_response(error.read())
+        logging.error("enroll_failed status=%s reason=%s message=%s", error.code, reason, message)
+        return 1
+    except urllib.error.URLError as error:
+        logging.error("enroll_failed reason=network_error message=%s", error.reason)
+        return 1
+
+    secret = data.get("secret")
+    kiosk_uuid = data.get("kiosk_uuid")
+    if not secret or not kiosk_uuid:
+        logging.error("enroll_failed reason=invalid_response")
+        return 1
+
+    write_config(config_path, server_url, kiosk_uuid, secret, DEFAULT_INTERVAL)
+    logging.info("enroll_ok kiosk_uuid=%s config_path=%s", kiosk_uuid, config_path)
+    return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    configure_logging()
+    parser = argparse.ArgumentParser(description="SSP Kiosk heartbeat agent")
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    subparsers.add_parser("run", help="Run the heartbeat daemon")
+    subparsers.add_parser("check", help="Send one heartbeat and print diagnostics")
+
+    enroll_parser = subparsers.add_parser("enroll", help="Enroll with a one-time code and write agent.conf")
+    enroll_parser.add_argument("--code", required=True, help="Enrollment code from admin")
+    enroll_parser.add_argument("--server", default=os.environ.get("SSPKIOSK_SERVER_URL", ""), help="Server base URL")
+    enroll_parser.add_argument("--config", default=str(CONFIG_PATH), help="Config file path")
+
+    args = parser.parse_args(argv)
+
+    if args.command == "enroll":
+        if not args.server:
+            raise SystemExit("Missing server URL. Pass --server or set SSPKIOSK_SERVER_URL.")
+        return cmd_enroll(args.server, args.code, Path(args.config))
+
+    config = load_config()
+
+    if args.command == "check":
+        return cmd_check(config)
+
+    return run_daemon(config)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

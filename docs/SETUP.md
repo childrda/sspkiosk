@@ -146,9 +146,9 @@ From the kiosk detail page you can also disable the kiosk, rotate its secret, is
 
 ### Step 3 — Enroll the physical device
 
-Enrollment exchanges the one-time code for a kiosk identity. Choose **one** path:
+Enrollment exchanges the one-time code for a kiosk identity. **Recommended:** use the heartbeat agent (Option B). Browser enrollment (Option A) also works and now shows the device secret once for agent provisioning.
 
-#### Option A — Browser enrollment (simplest for a locked-down kiosk PC)
+#### Option A — Browser enrollment
 
 1. On the kiosk browser, open:
 
@@ -158,13 +158,39 @@ Enrollment exchanges the one-time code for a kiosk identity. Choose **one** path
 
 2. Enter the enrollment code from the admin dashboard and submit.
 
-3. On success, the app stores the kiosk ID in the browser session and redirects to `/kiosk/reset`.
+3. On success, the app shows a **one-time secret** on `/kiosk/enroll/complete` with a copy button and downloadable `agent.conf`. Store it immediately — it is not shown again.
 
-4. Bookmark `/kiosk/reset` as the kiosk home page. Do not clear cookies on that browser profile.
+4. Install and start the heartbeat agent (see Option B, steps 3–5) using that secret, then continue to `/kiosk/reset`.
 
-The enrollment **secret is not shown** in the browser (JSON API clients receive it; see Option B). Browser kiosks rely on the session cookie plus CSRF for reset forms.
+5. Bookmark `/kiosk/reset` as the kiosk home page. Do not clear cookies on that browser profile.
 
-#### Option B — API enrollment (for a kiosk agent or custom integration)
+#### Option B — Agent enrollment (recommended)
+
+1. In admin, create the kiosk and set **`allowed_ip`** to the DHCP reservation for this device (recommended so the browser session can be recovered by IP if cookies expire).
+
+2. Issue a one-time enrollment code from the kiosk detail page.
+
+3. On the kiosk PC (Ubuntu thin client):
+
+   ```bash
+   sudo bash /path/to/sspkiosk/agent/install.sh
+   sudo sspkiosk-agent enroll --code XXXX-XXXX-XXXX --server https://your-host
+   sudo systemctl enable --now sspkiosk-agent
+   ```
+
+4. Verify:
+
+   ```bash
+   sspkiosk-agent check
+   ```
+
+   In admin, the kiosk should show **Online** (fresh heartbeat within `KIOSK_HEARTBEAT_EXPIRES_AFTER_SECONDS`).
+
+5. Open `/kiosk/reset` in the kiosk browser. With a distinct `allowed_ip`, the app seeds the browser session from IP when needed — no separate bind call required.
+
+**Admin provisioning bundle:** After browser enrollment or secret rotation, download `agent.conf` once from the kiosk detail page while the secret is still flashed in session.
+
+#### Option C — API enrollment (custom integration)
 
 ```http
 POST /kiosk/enroll
@@ -185,37 +211,35 @@ Response (shown **once**):
 }
 ```
 
-Store `secret` and `kiosk_uuid` securely on the device. Then:
+Store `secret` and `kiosk_uuid` securely on the device, write `/etc/sspkiosk/agent.conf`, and run `sspkiosk-agent`.
 
-1. Send signed **heartbeats** (see below).
-2. Call **`POST /kiosk/bind-session`** with HMAC headers and a web session cookie if students will register on this kiosk (`REGISTRATION_REQUIRES_KIOSK=true`) or you need to bind session without using Option A.
+### Step 4 — Heartbeat (required when `KIOSK_REQUIRE_ACTIVE_HEARTBEAT=true`)
 
-### Step 4 — Heartbeat (when required)
-
-If `KIOSK_REQUIRE_ACTIVE_HEARTBEAT=true` (default in `.env.example`), the kiosk must call:
+The **`sspkiosk-agent`** service sends signed heartbeats automatically:
 
 ```http
 POST /kiosk/heartbeat
 ```
 
-every `KIOSK_HEARTBEAT_INTERVAL_SECONDS`, with HMAC headers (see below). Without a recent heartbeat, `/kiosk/reset` redirects to the unavailable page.
+every `SSPKIOSK_HEARTBEAT_INTERVAL` seconds (default 60). The server returns `heartbeat_interval_seconds`; the agent adopts it. Default freshness window is **300 seconds** (`KIOSK_HEARTBEAT_EXPIRES_AFTER_SECONDS`) — at least 3× the interval.
 
-For a **browser-only** kiosk (Option A), either:
+Without a recent heartbeat, `/kiosk/reset` redirects to the unavailable page.
 
-- Run a small local script on the PC that sends signed heartbeats using the secret from Option B enrollment, or
-- Set `KIOSK_REQUIRE_ACTIVE_HEARTBEAT=false` only if your security policy allows it (not recommended for production).
+Schedule `ssp:prune-nonces` hourly (configured in `routes/console.php`) to keep the `used_nonces` table bounded.
 
-### Step 5 — Bind browser session (API enroll + student registration on kiosk)
+### Step 5 — Browser session and bind-session
 
-If you enrolled via **Option B** and students will complete **registration** at this kiosk (`REGISTRATION_REQUIRES_KIOSK=true`):
+**Recommended:** assign each kiosk a **DHCP reservation** and set `allowed_ip` on the kiosk record. `EnsureKioskWebSession` resolves the kiosk from source IP when the session cookie is missing (`kiosk.session.ip_resolved` audit event).
+
+**Escape hatch:** if you cannot use a reservation, call:
 
 ```http
 POST /kiosk/bind-session
 ```
 
-Use the same HMAC headers as heartbeat, with an active web session cookie. This sets the kiosk ID in session so `/register` works on that browser.
+with HMAC headers **and** the browser session cookie. The agent cannot do this alone — only the kiosk browser (or a helper sharing its cookie jar) can bind the session.
 
-Browser enrollment (Option A) sets the session automatically; you do not need a separate bind call for password reset.
+Browser enrollment (Option A) sets the session automatically at enroll time; heartbeats keep the kiosk online; IP resolution covers cookie loss when `allowed_ip` is set.
 
 ### HMAC-signed API requests
 
@@ -250,12 +274,17 @@ Sign with the enrollment secret. Requests are rejected if the timestamp is outsi
 
 ### Troubleshooting kiosk access
 
-| Symptom | Likely cause |
-|---------|----------------|
-| Redirect loop or blank page on unavailable | Fixed in current app: `/kiosk/reset/unavailable` must load without a kiosk session. Update if you see a loop on older code. |
-| Redirect to `/kiosk/reset/unavailable` | No kiosk in session (enroll again), kiosk disabled, IP blocked, stale heartbeat, or invalid `RESET_PASSWORD_MODE`. |
-| `401` on heartbeat or bind-session | Wrong secret, clock skew, bad signature, or reused nonce. |
-| `401` on reset form POST | Should not happen on current code; reset POSTs do not use HMAC. |
+| Symptom | Likely cause | Fix |
+|---------|----------------|-----|
+| Redirect loop or blank page on unavailable | Older builds looped on unavailable | Update; `/kiosk/reset/unavailable` must load without a kiosk session |
+| Redirect to `/kiosk/reset/unavailable` after ~5 min | No heartbeat agent running | Install `sspkiosk-agent`, verify with `sspkiosk-agent check` |
+| Redirect to `/kiosk/reset/unavailable` | No kiosk in session and IP not uniquely mapped | Set `allowed_ip` (DHCP reservation) or call `POST /kiosk/bind-session` |
+| Kiosk disabled / not enrolled | Admin disabled kiosk or secret rotated without updating device | Re-enable in admin or re-enroll and update `agent.conf` |
+| `401` `invalid_signature` | Wrong secret or body/path mismatch in signer | Re-download `agent.conf` after rotation; run `sspkiosk-agent check` |
+| `401` `timestamp_expired` | Clock skew on thin client | Enable NTP (`timedatectl set-ntp true`); compare local time to server `Date` header in agent logs |
+| `401` `nonce_reused` | Cloned disk image or duplicate agent config | Unique enrollment per device; regenerate secret on one copy |
+| `403` `ip_not_allowed` | DHCP changed or kiosk moved VLAN | Update `allowed_ip` / subnet in admin to match reservation |
+| `401` on reset form POST | Should not happen | Reset POSTs use session + CSRF only, not HMAC |
 
 ### Network and secrets
 

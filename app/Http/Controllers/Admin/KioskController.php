@@ -6,14 +6,19 @@ use App\Http\Controllers\Controller;
 use App\Http\Requests\Admin\StoreKioskRequest;
 use App\Models\Kiosk;
 use App\Services\AdminKioskService;
+use App\Services\AuditLogService;
+use App\Services\KioskProvisioningService;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Http\Response;
 use Illuminate\View\View;
 
 class KioskController extends Controller
 {
     public function __construct(
         private readonly AdminKioskService $adminKiosks,
+        private readonly KioskProvisioningService $provisioning,
+        private readonly AuditLogService $auditLog,
     ) {}
 
     public function index(): View
@@ -89,7 +94,36 @@ class KioskController extends Controller
         return redirect()
             ->route('admin.kiosks.show', $kiosk)
             ->with('status', 'Kiosk secret rotated. Copy it now — it will not be shown again.')
-            ->with('kiosk_secret', $secret);
+            ->with('kiosk_secret', $secret)
+            ->with('kiosk_secret_for', $kiosk->id);
+    }
+
+    public function provisioningBundle(Request $request, Kiosk $kiosk): Response|RedirectResponse
+    {
+        $secret = $request->session()->get('kiosk_secret');
+        $secretFor = $request->session()->get('kiosk_secret_for');
+
+        if ($secret === null || (int) $secretFor !== $kiosk->id) {
+            abort(404);
+        }
+
+        $this->auditLog->logAdmin(
+            'kiosk.provisioning_bundle.downloaded',
+            (int) $request->user()->id,
+            'kiosk',
+            (string) $kiosk->id,
+            ['kiosk_uuid' => $kiosk->kiosk_uuid],
+            $request,
+        );
+
+        $ini = $this->provisioning->buildAgentConfigIni($kiosk->kiosk_uuid, $secret);
+
+        $request->session()->forget(['kiosk_secret', 'kiosk_secret_for']);
+
+        return response($ini, 200, [
+            'Content-Type' => 'text/plain; charset=UTF-8',
+            'Content-Disposition' => 'attachment; filename="agent.conf"',
+        ]);
     }
 
     public function issueEnrollmentCode(Request $request, Kiosk $kiosk): RedirectResponse

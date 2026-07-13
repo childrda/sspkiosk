@@ -15,6 +15,12 @@
         <p><strong>Allowed IP:</strong> {{ $kiosk->allowed_ip ?? '—' }}</p>
         <p><strong>Allowed subnet:</strong> {{ $kiosk->allowed_subnet ?? '—' }}</p>
 
+        @if (session('kiosk_secret') && session('kiosk_secret_for') === $kiosk->id)
+            <div class="flash flash-secret" style="margin-top:1rem;">
+                <a class="btn btn-secondary" href="{{ route('admin.kiosks.provisioning-bundle', $kiosk) }}">Download agent.conf provisioning bundle</a>
+            </div>
+        @endif
+
         <div class="actions">
             @if ($kiosk->status->value === 'active')
                 <form method="post" action="{{ route('admin.kiosks.disable', $kiosk) }}" class="inline" onsubmit="return confirm('Disable this kiosk?');">

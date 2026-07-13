@@ -842,30 +842,33 @@ php artisan kiosk:enrollment-code KIOSK_UUID_OR_ID
 
 ### Step 12.3 — Register (enroll) the physical kiosk
 
-Pick one enrollment method on the kiosk PC:
+**Recommended:** DHCP reservation per kiosk, `allowed_ip` on the kiosk record, and the **`sspkiosk-agent`** heartbeat service.
 
-**Browser enrollment (typical for a lab or library kiosk):**
+1. In admin, create the kiosk and set **allowed IP** to the DHCP reservation.
+2. Issue a one-time enrollment code.
+3. On the kiosk PC:
+
+   ```bash
+   sudo bash /var/www/sspkiosk/agent/install.sh
+   sudo sspkiosk-agent enroll --code XXXX-XXXX-XXXX --server https://kiosk.yourdistrict.org
+   sudo systemctl enable --now sspkiosk-agent
+   sspkiosk-agent check
+   ```
+
+4. Open `https://kiosk.yourdistrict.org/kiosk/reset` in kiosk mode. With `allowed_ip` set, a missing browser cookie is recovered from source IP automatically.
+
+**Browser enrollment (alternative):**
 
 1. On the kiosk, open `https://kiosk.yourdistrict.org/kiosk/enroll`.
 2. Enter the enrollment code and submit.
-3. Confirm you are redirected to `/kiosk/reset`.
-4. Set the browser home page or shortcut to `/kiosk/reset`. Do not clear cookies for this profile.
+3. Copy the **one-time secret** on `/kiosk/enroll/complete`, install the agent, then continue to `/kiosk/reset`.
+4. Set the browser home page to `/kiosk/reset`. Do not clear cookies for this profile.
 
-**API enrollment (if a local agent stores the secret and sends heartbeats):**
+**Admin:** After enrollment or secret rotation, download `agent.conf` once from the kiosk detail page (provisioning bundle) while the secret is flashed.
 
-```http
-POST https://kiosk.yourdistrict.org/kiosk/enroll
-Content-Type: application/json
-Accept: application/json
+If students will **register** on this kiosk and you cannot use DHCP + `allowed_ip`, call `POST /kiosk/bind-session` with HMAC headers and a browser session cookie.
 
-{"enrollment_code":"XXXX-XXXX-XXXX"}
-```
-
-Save `secret` and `kiosk_uuid` on the device. Configure the agent to call `POST /kiosk/heartbeat` with HMAC headers every `KIOSK_HEARTBEAT_INTERVAL_SECONDS`.
-
-If students will **register** on this kiosk (`REGISTRATION_REQUIRES_KIOSK=true`), also call `POST /kiosk/bind-session` with HMAC headers and a browser session cookie.
-
-Full details (HMAC canonical string, heartbeat requirements, troubleshooting): [SETUP.md — Registering a kiosk](SETUP.md#registering-a-kiosk).
+Full details: [SETUP.md — Registering a kiosk](SETUP.md#registering-a-kiosk).
 
 ### Step 12.4 — Verification checklist
 
@@ -873,7 +876,8 @@ Full details (HMAC canonical string, heartbeat requirements, troubleshooting): [
 |-------|-----|
 | App health | `curl -I https://kiosk.yourdistrict.org/up` |
 | Configuration | `php artisan ssp:config-check` (includes valid `RESET_PASSWORD_MODE`) |
-| Kiosk enrollment | `/kiosk/enroll` with a test code → lands on `/kiosk/reset` |
+| Kiosk enrollment | `sspkiosk-agent check` succeeds; admin shows kiosk **Online** |
+| Heartbeat agent | `sudo systemctl status sspkiosk-agent` active |
 | Registration | Open `/register`, sign in with a student test account |
 | Kiosk reset | Complete a test reset through pending-password or submitted screen |
 | Reset mode | `.env` has `RESET_PASSWORD_MODE=temporary_generated` or `student_selected_pending_approval` |
