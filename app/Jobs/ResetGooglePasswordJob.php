@@ -133,6 +133,10 @@ class ResetGooglePasswordJob implements ShouldQueue
             return true;
         }
 
+        if ($request->pending_password_printed_at !== null) {
+            return true;
+        }
+
         $type = $request->pending_password_type;
 
         if ($type === PendingPasswordType::StudentSelected->value) {

@@ -49,6 +49,8 @@ Route::prefix('kiosk')->group(function () {
             Route::get('/password', [KioskResetController::class, 'showPassword'])->name('password');
             Route::get('/pending-password/{resetRequest}', [KioskResetController::class, 'pendingPassword'])
                 ->name('pending-password');
+            Route::post('/pending-password/{resetRequest}/print', [KioskResetController::class, 'markPrinted'])
+                ->name('print');
             Route::get('/submitted/{resetRequest}', [KioskResetController::class, 'submitted'])->name('submitted');
         });
 

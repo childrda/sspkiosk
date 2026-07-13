@@ -98,6 +98,43 @@ class AdminKioskService
         return $code;
     }
 
+    public function archive(Kiosk $kiosk, int $adminUserId): void
+    {
+        DB::transaction(function () use ($kiosk, $adminUserId): void {
+            $kiosk->update([
+                'status' => KioskStatus::Disabled,
+                'secret_hash' => null,
+            ]);
+
+            $kiosk->enrollmentCodes()->delete();
+            $kiosk->usedNonces()->delete();
+            $kiosk->delete();
+
+            $this->auditLog->logAdmin(
+                'admin.kiosk.archived',
+                $adminUserId,
+                'kiosk',
+                (string) $kiosk->id,
+            );
+        });
+    }
+
+    public function restore(Kiosk $kiosk, int $adminUserId): void
+    {
+        $kiosk->restore();
+
+        if ($kiosk->status !== KioskStatus::Disabled) {
+            $kiosk->update(['status' => KioskStatus::Disabled]);
+        }
+
+        $this->auditLog->logAdmin(
+            'admin.kiosk.restored',
+            $adminUserId,
+            'kiosk',
+            (string) $kiosk->id,
+        );
+    }
+
     public function isOnline(Kiosk $kiosk): bool
     {
         if ($kiosk->last_seen_at === null) {

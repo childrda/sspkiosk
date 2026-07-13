@@ -7,11 +7,13 @@ use Database\Factories\KioskFactory;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\SoftDeletes;
 
 class Kiosk extends Model
 {
     /** @use HasFactory<KioskFactory> */
     use HasFactory;
+    use SoftDeletes;
 
     protected $fillable = [
         'kiosk_uuid',

@@ -21,9 +21,13 @@ class KioskController extends Controller
         private readonly AuditLogService $auditLog,
     ) {}
 
-    public function index(): View
+    public function index(Request $request): View
     {
-        $kiosks = Kiosk::query()
+        $archived = $request->boolean('archived');
+
+        $query = $archived ? Kiosk::onlyTrashed() : Kiosk::query();
+
+        $kiosks = $query
             ->withCount('passwordResetRequests')
             ->orderBy('name')
             ->get()
@@ -35,6 +39,7 @@ class KioskController extends Controller
 
         return view('admin.kiosks.index', [
             'kiosks' => $kiosks,
+            'archived' => $archived,
         ]);
     }
 
@@ -144,16 +149,19 @@ class KioskController extends Controller
 
     public function destroy(Request $request, Kiosk $kiosk): RedirectResponse
     {
-        if ($kiosk->passwordResetRequests()->exists()) {
-            return redirect()
-                ->route('admin.kiosks.show', $kiosk)
-                ->with('error', 'This kiosk cannot be deleted because it has password reset request history.');
-        }
-
-        $kiosk->delete();
+        $this->adminKiosks->archive($kiosk, (int) $request->user()->id);
 
         return redirect()
             ->route('admin.kiosks.index')
-            ->with('status', 'Kiosk deleted.');
+            ->with('status', 'Kiosk archived. Reset request history is retained.');
+    }
+
+    public function restore(Request $request, Kiosk $kiosk): RedirectResponse
+    {
+        $this->adminKiosks->restore($kiosk, (int) $request->user()->id);
+
+        return redirect()
+            ->route('admin.kiosks.show', $kiosk)
+            ->with('status', 'Kiosk restored. Enable and re-enroll it before putting it back in service.');
     }
 }

@@ -80,6 +80,8 @@ return [
 
     'office_verification_max_queue_depth' => (int) env('OFFICE_VERIFICATION_MAX_QUEUE_DEPTH', 25),
 
+    'label_printing_enabled' => filter_var(env('LABEL_PRINTING_ENABLED', false), FILTER_VALIDATE_BOOL),
+
     'registration_requires_kiosk' => filter_var(
         env('REGISTRATION_REQUIRES_KIOSK', false),
         FILTER_VALIDATE_BOOL

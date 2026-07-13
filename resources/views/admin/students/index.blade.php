@@ -6,6 +6,13 @@
     <h1>Student registration lookup</h1>
 
     <div class="card">
+        <p>
+            <a class="btn btn-secondary" href="{{ route('admin.students.export') }}">Export registered students (CSV)</a>
+            <a class="btn btn-secondary" href="{{ route('admin.students.roster-compare') }}">Compare against SIS roster</a>
+        </p>
+    </div>
+
+    <div class="card">
         <form method="get" action="{{ route('admin.students.index') }}">
             <label for="q">Search by name, email, or Google sub</label>
             <input type="text" name="q" id="q" value="{{ $query }}" placeholder="alex@students.example.org">

@@ -6,16 +6,24 @@ use App\Enums\StudentPhotoType;
 use App\Http\Controllers\Controller;
 use App\Models\Student;
 use App\Services\AdminStudentService;
+use App\Services\AuditLogService;
 use App\Services\ResetAttemptLimiterService;
+use App\Services\RosterComparisonService;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Http\UploadedFile;
+use Illuminate\Support\Facades\Validator;
+use Illuminate\Validation\ValidationException;
 use Illuminate\View\View;
+use Symfony\Component\HttpFoundation\StreamedResponse;
 
 class StudentController extends Controller
 {
     public function __construct(
         private readonly AdminStudentService $adminStudents,
         private readonly ResetAttemptLimiterService $attemptLimiter,
+        private readonly AuditLogService $auditLog,
+        private readonly RosterComparisonService $rosterComparison,
     ) {}
 
     public function index(Request $request): View
@@ -37,6 +45,170 @@ class StudentController extends Controller
         return view('admin.students.index', [
             'students' => $students,
             'query' => $query,
+        ]);
+    }
+
+    public function export(Request $request): StreamedResponse
+    {
+        $rowCount = Student::query()->count();
+
+        $this->auditLog->logAdmin(
+            'admin.students.exported',
+            (int) $request->user()->id,
+            'student',
+            null,
+            ['row_count' => $rowCount],
+            $request,
+        );
+
+        $filename = 'registered-students-'.now()->format('Y-m-d').'.csv';
+
+        return response()->streamDownload(function (): void {
+            $handle = fopen('php://output', 'w');
+
+            fputcsv($handle, [
+                'email',
+                'name',
+                'school',
+                'grade',
+                'org_unit_path',
+                'registered_at',
+                'questions_count',
+                'has_registration_photo',
+                'reset_enabled',
+                'reset_requests_count',
+                'last_reset_at',
+            ]);
+
+            Student::query()
+                ->withCount(['challengeQuestions', 'passwordResetRequests'])
+                ->withExists([
+                    'photos as has_registration_photo' => fn ($query) => $query->where('type', StudentPhotoType::Registration),
+                ])
+                ->withMax('passwordResetRequests as last_reset_at', 'requested_at')
+                ->orderBy('name')
+                ->chunk(500, function ($students) use ($handle): void {
+                    foreach ($students as $student) {
+                        fputcsv($handle, [
+                            $student->email,
+                            $student->name,
+                            $student->school,
+                            $student->grade,
+                            $student->org_unit_path,
+                            $student->registered_at?->toIso8601String(),
+                            $student->challenge_questions_count,
+                            $student->has_registration_photo ? '1' : '0',
+                            $student->reset_enabled ? '1' : '0',
+                            $student->password_reset_requests_count,
+                            $student->last_reset_at,
+                        ]);
+                    }
+                });
+
+            fclose($handle);
+        }, $filename, [
+            'Content-Type' => 'text/csv',
+        ]);
+    }
+
+    public function showRosterCompare(): View
+    {
+        return view('admin.students.roster-compare');
+    }
+
+    public function rosterCompare(Request $request): View|RedirectResponse
+    {
+        $validator = Validator::make($request->all(), [
+            'roster' => ['required', 'file', 'mimes:csv,txt', 'max:10240'],
+        ]);
+
+        $validator->validate();
+
+        /** @var UploadedFile $file */
+        $file = $request->file('roster');
+        $handle = fopen($file->getRealPath(), 'r');
+        $headerRow = $handle !== false ? fgetcsv($handle) : false;
+
+        if ($handle !== false) {
+            fclose($handle);
+        }
+
+        if ($headerRow === false) {
+            throw ValidationException::withMessages([
+                'roster' => 'The roster file is empty.',
+            ]);
+        }
+
+        if ($this->rosterComparison->findEmailColumnIndex($headerRow) === null) {
+            $headers = $this->rosterComparison->readableHeaders($headerRow);
+
+            throw ValidationException::withMessages([
+                'roster' => 'The CSV must include an email column. Headers found: '.implode(', ', $headers),
+            ]);
+        }
+
+        $comparison = $this->rosterComparison->compare($file);
+
+        $request->session()->put('roster_comparison', $comparison);
+
+        $this->auditLog->logAdmin(
+            'admin.students.roster_compared',
+            (int) $request->user()->id,
+            'student',
+            null,
+            [
+                'in_roster_not_registered_count' => count($comparison['in_roster_not_registered']),
+                'registered_not_in_roster_count' => count($comparison['registered_not_in_roster']),
+                'both_count' => $comparison['both_count'],
+            ],
+            $request,
+        );
+
+        return view('admin.students.roster-compare-results', [
+            'comparison' => $comparison,
+        ]);
+    }
+
+    public function downloadRosterCompareBucket(Request $request, string $bucket): StreamedResponse
+    {
+        $comparison = $request->session()->get('roster_comparison');
+
+        if (! is_array($comparison)) {
+            abort(404);
+        }
+
+        $rows = match ($bucket) {
+            'in_roster_not_registered' => $comparison['in_roster_not_registered'] ?? null,
+            'registered_not_in_roster' => $comparison['registered_not_in_roster'] ?? null,
+            default => null,
+        };
+
+        if (! is_array($rows)) {
+            abort(404);
+        }
+
+        $filename = $bucket.'-'.now()->format('Y-m-d').'.csv';
+
+        return response()->streamDownload(function () use ($rows, $bucket): void {
+            $handle = fopen('php://output', 'w');
+
+            if ($bucket === 'in_roster_not_registered') {
+                fputcsv($handle, ['email', 'name']);
+
+                foreach ($rows as $row) {
+                    fputcsv($handle, [$row['email'], $row['name']]);
+                }
+            } else {
+                fputcsv($handle, ['email', 'name', 'school', 'grade']);
+
+                foreach ($rows as $row) {
+                    fputcsv($handle, [$row['email'], $row['name'], $row['school'], $row['grade']]);
+                }
+            }
+
+            fclose($handle);
+        }, $filename, [
+            'Content-Type' => 'text/csv',
         ]);
     }
 

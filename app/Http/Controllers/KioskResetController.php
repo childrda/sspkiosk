@@ -19,6 +19,7 @@ use App\Services\ResetPasswordModeService;
 use App\Services\StudentLookupService;
 use App\Services\StudentResetPhotoService;
 use App\Services\StudentSelectedPasswordValidator;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\View\View;
@@ -295,6 +296,8 @@ class KioskResetController extends Controller
 
         $this->pendingPasswords->markDisplayed($resetRequest);
 
+        $resetRequest->load('student');
+
         $this->auditLog->logStudent(
             'kiosk.reset.pending_password.displayed',
             $resetRequest->student_id,
@@ -305,12 +308,52 @@ class KioskResetController extends Controller
         $request->session()->forget(config('kiosk.active_reset_request_session_key'));
 
         return view('kiosk.reset.pending-password', [
+            'resetRequest' => $resetRequest,
+            'studentName' => $resetRequest->student->name,
             'temporaryPassword' => $password,
             'displaySeconds' => config('student-password-reset.pending_password.display_seconds'),
             'notice' => config('student-password-reset.pending_temp_password_notice'),
             'copyNoticeEnabled' => config('student-password-reset.pending_password.copy_notice_enabled'),
+            'labelPrintingEnabled' => config('student-password-reset.label_printing_enabled'),
             'submittedUrl' => route('kiosk.reset.submitted', $resetRequest),
         ]);
+    }
+
+    public function markPrinted(Request $request, PasswordResetRequest $resetRequest): JsonResponse
+    {
+        if (! config('student-password-reset.label_printing_enabled')) {
+            abort(403);
+        }
+
+        if ($response = $this->authorizeResetRequestAccess($request, $resetRequest)) {
+            abort(403);
+        }
+
+        $resetRequest->refresh();
+
+        if ($resetRequest->pending_password_printed_at !== null) {
+            abort(409);
+        }
+
+        if ($resetRequest->pending_password_displayed_at === null) {
+            abort(403);
+        }
+
+        $resetRequest->forceFill([
+            'pending_password_printed_at' => now(),
+        ])->save();
+
+        $this->auditLog->logStudent(
+            'password.label_printed',
+            $resetRequest->student_id,
+            [
+                'request_id' => $resetRequest->id,
+                'kiosk_id' => $resetRequest->kiosk_id,
+            ],
+            $request,
+        );
+
+        return response()->json(['status' => 'ok']);
     }
 
     public function submitted(Request $request, PasswordResetRequest $resetRequest): View|RedirectResponse

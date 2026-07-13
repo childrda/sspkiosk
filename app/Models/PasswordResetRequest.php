@@ -43,6 +43,7 @@ class PasswordResetRequest extends Model
         'encrypted_pending_password',
         'pending_password_created_at',
         'pending_password_displayed_at',
+        'pending_password_printed_at',
         'pending_password_deleted_at',
         'pending_password_expires_at',
         'pending_password_type',
@@ -64,6 +65,7 @@ class PasswordResetRequest extends Model
             'google_reset_success' => 'boolean',
             'pending_password_created_at' => 'datetime',
             'pending_password_displayed_at' => 'datetime',
+            'pending_password_printed_at' => 'datetime',
             'pending_password_deleted_at' => 'datetime',
             'pending_password_expires_at' => 'datetime',
         ];
@@ -83,7 +85,7 @@ class PasswordResetRequest extends Model
 
     public function kiosk(): BelongsTo
     {
-        return $this->belongsTo(Kiosk::class);
+        return $this->belongsTo(Kiosk::class)->withTrashed();
     }
 
     public function resetPhoto(): BelongsTo

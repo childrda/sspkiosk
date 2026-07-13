@@ -96,7 +96,7 @@ class AdminDashboardTest extends TestCase
         );
     }
 
-    public function test_admin_can_delete_kiosk_without_reset_history(): void
+    public function test_admin_can_archive_kiosk_without_reset_history(): void
     {
         $admin = $this->adminUser();
         $kiosk = Kiosk::factory()->create();
@@ -107,9 +107,13 @@ class AdminDashboardTest extends TestCase
             ->assertSessionHas('status');
 
         $this->assertNull(Kiosk::query()->find($kiosk->id));
+        $this->assertNotNull(Kiosk::withTrashed()->find($kiosk->id));
+        $this->assertTrue(
+            AuditLog::query()->where('action', 'admin.kiosk.archived')->exists(),
+        );
     }
 
-    public function test_admin_cannot_delete_kiosk_with_reset_history(): void
+    public function test_admin_can_archive_kiosk_with_reset_history(): void
     {
         $admin = $this->adminUser();
         $kiosk = Kiosk::factory()->create();
@@ -117,10 +121,12 @@ class AdminDashboardTest extends TestCase
 
         $this->actingAs($admin)
             ->delete(route('admin.kiosks.destroy', $kiosk))
-            ->assertRedirect(route('admin.kiosks.show', $kiosk))
-            ->assertSessionHas('error');
+            ->assertRedirect(route('admin.kiosks.index'))
+            ->assertSessionHas('status');
 
-        $this->assertNotNull($kiosk->fresh());
+        $this->assertNull(Kiosk::query()->find($kiosk->id));
+        $this->assertNotNull(Kiosk::withTrashed()->find($kiosk->id));
+        $this->assertSame(1, PasswordResetRequest::query()->where('kiosk_id', $kiosk->id)->count());
     }
 
     public function test_admin_can_disable_student_reset_eligibility(): void

@@ -5,6 +5,10 @@
 @section('content')
     <h1>{{ $kiosk->name }}</h1>
 
+    @if ($kiosk->trashed())
+        <div class="flash">This kiosk is archived. Reset request history is retained.</div>
+    @endif
+
     <div class="card">
         <p><strong>UUID:</strong> {{ $kiosk->kiosk_uuid }}</p>
         <p><strong>Status:</strong> {{ $kiosk->status->value }}</p>
@@ -22,40 +26,47 @@
         @endif
 
         <div class="actions">
-            @if ($kiosk->status->value === 'active')
-                <form method="post" action="{{ route('admin.kiosks.disable', $kiosk) }}" class="inline" onsubmit="return confirm('Disable this kiosk?');">
+            @if ($kiosk->trashed())
+                <form method="post" action="{{ route('admin.kiosks.restore', $kiosk) }}" class="inline">
                     @csrf
-                    <button type="submit" class="btn btn-danger">Disable kiosk</button>
+                    <button type="submit" class="btn btn-primary">Restore kiosk</button>
                 </form>
             @else
-                <form method="post" action="{{ route('admin.kiosks.enable', $kiosk) }}" class="inline">
+                @if ($kiosk->status->value === 'active')
+                    <form method="post" action="{{ route('admin.kiosks.disable', $kiosk) }}" class="inline" onsubmit="return confirm('Disable this kiosk?');">
+                        @csrf
+                        <button type="submit" class="btn btn-danger">Disable kiosk</button>
+                    </form>
+                @else
+                    <form method="post" action="{{ route('admin.kiosks.enable', $kiosk) }}" class="inline">
+                        @csrf
+                        <button type="submit" class="btn btn-primary">Enable kiosk</button>
+                    </form>
+                @endif
+
+                @if ($isEnrolled)
+                    <form method="post" action="{{ route('admin.kiosks.rotate-secret', $kiosk) }}" class="inline" onsubmit="return confirm('Rotate secret? The kiosk must be updated with the new secret.');">
+                        @csrf
+                        <button type="submit" class="btn btn-secondary">Rotate secret</button>
+                    </form>
+                @else
+                    <form method="post" action="{{ route('admin.kiosks.enrollment-code', $kiosk) }}" class="inline">
+                        @csrf
+                        <button type="submit" class="btn btn-secondary">Issue enrollment code</button>
+                    </form>
+                @endif
+
+                <form
+                    method="post"
+                    action="{{ route('admin.kiosks.destroy', $kiosk) }}"
+                    class="inline"
+                    onsubmit="return confirm('Archive this kiosk? Reset request history will be kept, but the device can no longer authenticate.');"
+                >
                     @csrf
-                    <button type="submit" class="btn btn-primary">Enable kiosk</button>
+                    @method('DELETE')
+                    <button type="submit" class="btn btn-danger">Archive kiosk</button>
                 </form>
             @endif
-
-            @if ($isEnrolled)
-                <form method="post" action="{{ route('admin.kiosks.rotate-secret', $kiosk) }}" class="inline" onsubmit="return confirm('Rotate secret? The kiosk must be updated with the new secret.');">
-                    @csrf
-                    <button type="submit" class="btn btn-secondary">Rotate secret</button>
-                </form>
-            @else
-                <form method="post" action="{{ route('admin.kiosks.enrollment-code', $kiosk) }}" class="inline">
-                    @csrf
-                    <button type="submit" class="btn btn-secondary">Issue enrollment code</button>
-                </form>
-            @endif
-
-            <form
-                method="post"
-                action="{{ route('admin.kiosks.destroy', $kiosk) }}"
-                class="inline"
-                onsubmit="return confirm('Delete this kiosk? This cannot be undone.');"
-            >
-                @csrf
-                @method('DELETE')
-                <button type="submit" class="btn btn-danger">Delete kiosk</button>
-            </form>
         </div>
     </div>
 

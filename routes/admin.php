@@ -36,7 +36,9 @@ Route::middleware('web')->prefix($prefix)->name('admin.')->group(function () {
 
         Route::get('kiosks', [KioskController::class, 'index'])->name('kiosks.index');
         Route::post('kiosks', [KioskController::class, 'store'])->name('kiosks.store');
-        Route::get('kiosks/{kiosk}', [KioskController::class, 'show'])->name('kiosks.show');
+        Route::get('kiosks/{kiosk}', [KioskController::class, 'show'])
+            ->withTrashed()
+            ->name('kiosks.show');
         Route::post('kiosks/{kiosk}/disable', [KioskController::class, 'disable'])->name('kiosks.disable');
         Route::post('kiosks/{kiosk}/enable', [KioskController::class, 'enable'])->name('kiosks.enable');
         Route::post('kiosks/{kiosk}/rotate-secret', [KioskController::class, 'rotateSecret'])
@@ -46,8 +48,18 @@ Route::middleware('web')->prefix($prefix)->name('admin.')->group(function () {
         Route::get('kiosks/{kiosk}/provisioning-bundle', [KioskController::class, 'provisioningBundle'])
             ->name('kiosks.provisioning-bundle');
         Route::delete('kiosks/{kiosk}', [KioskController::class, 'destroy'])->name('kiosks.destroy');
+        Route::post('kiosks/{kiosk}/restore', [KioskController::class, 'restore'])
+            ->withTrashed()
+            ->name('kiosks.restore');
 
         Route::get('students', [StudentController::class, 'index'])->name('students.index');
+        Route::get('students/export', [StudentController::class, 'export'])->name('students.export');
+        Route::get('students/roster-compare', [StudentController::class, 'showRosterCompare'])
+            ->name('students.roster-compare');
+        Route::post('students/roster-compare', [StudentController::class, 'rosterCompare'])
+            ->name('students.roster-compare.run');
+        Route::get('students/roster-compare/download/{bucket}', [StudentController::class, 'downloadRosterCompareBucket'])
+            ->name('students.roster-compare.download');
         Route::get('students/{student}', [StudentController::class, 'show'])->name('students.show');
         Route::post('students/{student}/disable-reset', [StudentController::class, 'disableReset'])
             ->name('students.disable-reset');
