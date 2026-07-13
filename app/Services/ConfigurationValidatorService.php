@@ -88,7 +88,7 @@ class ConfigurationValidatorService
             }
         }
 
-        return array_merge($missing, $this->missingInvalidAppUrl());
+        return $this->mergeMissing($missing, $this->missingInvalidAppUrl());
     }
 
     /**
@@ -100,6 +100,10 @@ class ConfigurationValidatorService
 
         if ($url === '') {
             return ['app' => ['APP_URL']];
+        }
+
+        if (! app()->environment('production')) {
+            return [];
         }
 
         $parsed = parse_url($url);
@@ -126,7 +130,7 @@ class ConfigurationValidatorService
      */
     public function allMissing(): array
     {
-        return array_merge(
+        return $this->mergeMissing(
             $this->missingRequiredForGoogleAuth(),
             $this->missingRequiredForGooglePasswordReset(),
             $this->missingRequiredForSlack(),
@@ -144,6 +148,21 @@ class ConfigurationValidatorService
             'kiosk_reset' => empty($this->missingRequiredForKioskReset()),
             default => false,
         };
+    }
+
+    /**
+     * @param  array<string, list<string>>  ...$groups
+     * @return array<string, list<string>>
+     */
+    private function mergeMissing(array ...$groups): array
+    {
+        $merged = [];
+
+        foreach ($groups as $group) {
+            $merged = array_merge_recursive($merged, $group);
+        }
+
+        return $merged;
     }
 
     /**

@@ -45,8 +45,9 @@ class ConfigurationValidatorServiceTest extends TestCase
         $this->assertContains('RESET_PASSWORD_MODE', $missing['student-password-reset']);
     }
 
-    public function test_kiosk_reset_rejects_localhost_app_url(): void
+    public function test_kiosk_reset_rejects_localhost_app_url_in_production(): void
     {
+        $this->app->detectEnvironment(fn () => 'production');
         config(['app.url' => 'http://localhost']);
 
         $missing = (new ConfigurationValidatorService)->missingInvalidAppUrl();
@@ -55,8 +56,9 @@ class ConfigurationValidatorServiceTest extends TestCase
         $this->assertContains('APP_URL (must use https)', $missing['app']);
     }
 
-    public function test_kiosk_reset_rejects_http_app_url(): void
+    public function test_kiosk_reset_rejects_http_app_url_in_production(): void
     {
+        $this->app->detectEnvironment(fn () => 'production');
         config(['app.url' => 'http://kiosk.example.org']);
 
         $missing = (new ConfigurationValidatorService)->missingInvalidAppUrl();
@@ -67,10 +69,39 @@ class ConfigurationValidatorServiceTest extends TestCase
 
     public function test_kiosk_reset_accepts_https_production_app_url(): void
     {
+        $this->app->detectEnvironment(fn () => 'production');
         config(['app.url' => 'https://kiosk.example.org']);
 
         $missing = (new ConfigurationValidatorService)->missingInvalidAppUrl();
 
         $this->assertSame([], $missing);
+    }
+
+    public function test_kiosk_reset_allows_localhost_app_url_outside_production(): void
+    {
+        $this->app->detectEnvironment(fn () => 'local');
+        config(['app.url' => 'http://localhost']);
+
+        $missing = (new ConfigurationValidatorService)->missingInvalidAppUrl();
+
+        $this->assertSame([], $missing);
+    }
+
+    public function test_merge_missing_appends_colliding_group_keys(): void
+    {
+        $validator = new ConfigurationValidatorService;
+        $method = new \ReflectionMethod($validator, 'mergeMissing');
+        $method->setAccessible(true);
+
+        $merged = $method->invoke($validator, [
+            'kiosk' => ['KIOSK_ALLOWED_NETWORKS'],
+            'app' => ['APP_URL (must use https)'],
+        ], [
+            'kiosk' => ['KIOSK_HEARTBEAT_EXPIRES_AFTER_SECONDS (must be at least 3× KIOSK_HEARTBEAT_INTERVAL_SECONDS)'],
+        ]);
+
+        $this->assertCount(2, $merged['kiosk']);
+        $this->assertContains('KIOSK_ALLOWED_NETWORKS', $merged['kiosk']);
+        $this->assertContains('APP_URL (must use https)', $merged['app']);
     }
 }
