@@ -35,6 +35,35 @@
     </div>
 
     <div class="card">
+        <h2>Office rejections today</h2>
+        <p class="muted">Students who were escalated for office verification but could not be identified in person.</p>
+        @if ($officeRejectionsToday->isEmpty())
+            <p class="muted">None today.</p>
+        @else
+            <table>
+                <thead>
+                    <tr>
+                        <th>Time</th>
+                        <th>Student</th>
+                        <th>Kiosk</th>
+                        <th>Reason</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach ($officeRejectionsToday as $request)
+                        <tr>
+                            <td>{{ $request->denied_at?->format('H:i') }}</td>
+                            <td><a href="{{ route('admin.students.show', $request->student) }}">{{ $request->student->name }}</a></td>
+                            <td>{{ $request->kiosk->name }}</td>
+                            <td>{{ $request->denial_reason }}</td>
+                        </tr>
+                    @endforeach
+                </tbody>
+            </table>
+        @endif
+    </div>
+
+    <div class="card">
         <h2>Students currently locked out</h2>
         @if ($studentLockouts->isEmpty())
             <p class="muted">None.</p>

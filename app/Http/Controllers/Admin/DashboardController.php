@@ -9,6 +9,7 @@ use App\Models\PasswordResetRequest;
 use App\Models\Student;
 use App\Services\AdminKioskService;
 use App\Services\ResetAttemptLimiterService;
+use Illuminate\Support\Facades\DB;
 use Illuminate\View\View;
 
 class DashboardController extends Controller
@@ -39,6 +40,11 @@ class DashboardController extends Controller
                 ->latest('requested_at')
                 ->limit(10)
                 ->get(),
+            'officeVerificationCount' => PasswordResetRequest::query()
+                ->where('status', PasswordResetRequestStatus::NeedsOfficeVerification)
+                ->count(),
+            'queueDepth' => DB::table('jobs')->count(),
+            'failedJobCount' => DB::table('failed_jobs')->count(),
         ]);
     }
 
@@ -60,8 +66,18 @@ class DashboardController extends Controller
             ->get()
             ->filter(fn (Kiosk $kiosk): bool => $this->attemptLimiter->isKioskLockedOut($kiosk));
 
+        $officeRejectionsToday = PasswordResetRequest::query()
+            ->with(['student', 'kiosk'])
+            ->where('status', PasswordResetRequestStatus::Denied)
+            ->whereNotNull('escalated_at')
+            ->whereNull('denied_by_slack_user_id')
+            ->where('denied_at', '>=', now()->startOfDay())
+            ->latest('denied_at')
+            ->get();
+
         return view('admin.reports.failed-attempts', [
             'failedToday' => $failedToday,
+            'officeRejectionsToday' => $officeRejectionsToday,
             'studentLockouts' => $studentLockouts,
             'kioskLockouts' => $kioskLockouts,
             'maxStudentAttempts' => config('student-password-reset.max_failed_attempts_per_student'),

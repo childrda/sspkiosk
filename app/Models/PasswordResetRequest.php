@@ -30,6 +30,12 @@ class PasswordResetRequest extends Model
         'denied_by_slack_user_id',
         'denied_at',
         'denial_reason',
+        'escalated_at',
+        'escalated_by_slack_user_id',
+        'office_verified_at',
+        'office_verified_by_user_id',
+        'office_verification_notes',
+        'office_verification_expires_at',
         'google_reset_attempted_at',
         'google_reset_success',
         'google_error_message',
@@ -51,6 +57,9 @@ class PasswordResetRequest extends Model
             'expires_at' => 'datetime',
             'approved_at' => 'datetime',
             'denied_at' => 'datetime',
+            'escalated_at' => 'datetime',
+            'office_verified_at' => 'datetime',
+            'office_verification_expires_at' => 'datetime',
             'google_reset_attempted_at' => 'datetime',
             'google_reset_success' => 'boolean',
             'pending_password_created_at' => 'datetime',
@@ -91,5 +100,16 @@ class PasswordResetRequest extends Model
     {
         return $this->expires_at->isPast()
             || $this->status === PasswordResetRequestStatus::Expired;
+    }
+
+    public function isOfficeVerificationExpired(): bool
+    {
+        return $this->office_verification_expires_at !== null
+            && $this->office_verification_expires_at->isPast();
+    }
+
+    public function officeVerifiedBy(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'office_verified_by_user_id');
     }
 }

@@ -30,6 +30,18 @@
             <strong>{{ $onlineKiosks }} / {{ $kiosks->count() }}</strong>
             <span class="muted">Kiosks online</span>
         </div>
+        <div class="stat">
+            <strong>{{ $officeVerificationCount }}</strong>
+            <a href="{{ route('admin.requests.index', ['status' => 'needs_office_verification']) }}">Awaiting office verification</a>
+        </div>
+        <div class="stat">
+            <strong>{{ $queueDepth }}</strong>
+            <span class="muted">Queued jobs</span>
+        </div>
+        <div class="stat">
+            <strong>{{ $failedJobCount }}</strong>
+            <span class="muted">Failed jobs</span>
+        </div>
     </div>
 
     <div class="card">

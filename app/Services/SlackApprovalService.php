@@ -269,12 +269,14 @@ class SlackApprovalService
 
         $request->update([
             'status' => PasswordResetRequestStatus::NeedsOfficeVerification,
-            'denied_by_slack_user_id' => $slackUserId,
-            'denied_at' => now(),
-            'denial_reason' => 'Escalated for office verification',
+            'escalated_at' => now(),
+            'escalated_by_slack_user_id' => $slackUserId,
+            'office_verification_expires_at' => now()->addHours(
+                (int) config('student-password-reset.office_verification_expires_hours', 48),
+            ),
         ]);
 
-        $this->pendingPasswords->delete($request, 'denial');
+        $this->pendingPasswords->delete($request, 'escalation');
 
         $this->auditLog->logTech('slack.reset.office_verification', $slackUserId, 'password_reset_request', (string) $request->id);
         $this->refreshSlackMessage($request, 'Needs office verification', $slackUserId);
@@ -332,6 +334,47 @@ class SlackApprovalService
             'channel' => $request->slack_channel_id,
             'ts' => $request->slack_message_ts,
             'text' => "Password reset request #{$request->id} — Google reset ".($success ? 'complete' : 'failed'),
+            'blocks' => $blocks,
+        ]);
+    }
+
+    public function notifyOfficeOutcome(
+        PasswordResetRequest $request,
+        string $statusLabel,
+        \App\Models\User $admin,
+    ): void {
+        if ($request->slack_channel_id === null || $request->slack_message_ts === null) {
+            return;
+        }
+
+        $request->load(['student', 'kiosk']);
+
+        $extraFields = [
+            '*Outcome*' => $statusLabel,
+            '*Admin*' => $admin->name.' ('.$admin->email.')',
+            '*Resolved at*' => now()->toDayDateTimeString(),
+            '*Student*' => "{$request->student->name} ({$request->student->email})",
+        ];
+
+        if ($request->office_verification_notes) {
+            $extraFields['*Office notes*'] = $request->office_verification_notes;
+        }
+
+        if ($request->denial_reason) {
+            $extraFields['*Rejection reason*'] = $request->denial_reason;
+        }
+
+        $blocks = $this->buildMessageBlocks(
+            request: $request,
+            statusLabel: $statusLabel,
+            includeActions: false,
+            extraFields: $extraFields,
+        );
+
+        $this->slackApi->updateMessage([
+            'channel' => $request->slack_channel_id,
+            'ts' => $request->slack_message_ts,
+            'text' => "Password reset request #{$request->id} — {$statusLabel}",
             'blocks' => $blocks,
         ]);
     }

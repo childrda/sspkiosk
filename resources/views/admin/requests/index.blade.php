@@ -5,6 +5,14 @@
 @section('content')
     <h1>Password reset requests</h1>
 
+    @if ($officeVerificationCount > 0)
+        <div class="flash flash-status">
+            <a href="{{ route('admin.requests.index', ['status' => 'needs_office_verification']) }}">
+                {{ $officeVerificationCount }} request(s) awaiting office verification
+            </a>
+        </div>
+    @endif
+
     <div class="card">
         <form method="get" action="{{ route('admin.requests.index') }}">
             <label for="status">Status</label>

@@ -76,6 +76,10 @@ return [
         FILTER_VALIDATE_BOOL
     ),
 
+    'office_verification_expires_hours' => (int) env('OFFICE_VERIFICATION_EXPIRES_HOURS', 48),
+
+    'office_verification_max_queue_depth' => (int) env('OFFICE_VERIFICATION_MAX_QUEUE_DEPTH', 25),
+
     'registration_requires_kiosk' => filter_var(
         env('REGISTRATION_REQUIRES_KIOSK', false),
         FILTER_VALIDATE_BOOL

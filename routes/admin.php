@@ -27,6 +27,12 @@ Route::middleware('web')->prefix($prefix)->name('admin.')->group(function () {
         Route::get('requests', [PasswordResetRequestController::class, 'index'])->name('requests.index');
         Route::get('requests/{passwordResetRequest}', [PasswordResetRequestController::class, 'show'])
             ->name('requests.show');
+        Route::post('requests/{passwordResetRequest}/office-verify', [PasswordResetRequestController::class, 'officeVerify'])
+            ->name('requests.office-verify');
+        Route::post('requests/{passwordResetRequest}/office-reject', [PasswordResetRequestController::class, 'officeReject'])
+            ->name('requests.office-reject');
+        Route::post('requests/{passwordResetRequest}/retry-reset', [PasswordResetRequestController::class, 'retryReset'])
+            ->name('requests.retry-reset');
 
         Route::get('kiosks', [KioskController::class, 'index'])->name('kiosks.index');
         Route::post('kiosks', [KioskController::class, 'store'])->name('kiosks.store');

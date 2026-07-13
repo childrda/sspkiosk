@@ -90,6 +90,7 @@ class PendingPasswordService
         return match ($reason) {
             'approval' => config('student-password-reset.pending_password.delete_on_approval', true),
             'denial' => config('student-password-reset.pending_password.delete_on_denial', true),
+            'escalation' => config('student-password-reset.pending_password.delete_on_denial', true),
             'expiration' => config('student-password-reset.pending_password.delete_on_expiration', true),
             'google_failure' => config('student-password-reset.pending_password.delete_on_google_failure', true),
             default => true,

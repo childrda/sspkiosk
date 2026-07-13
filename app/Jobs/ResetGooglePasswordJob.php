@@ -31,7 +31,7 @@ class ResetGooglePasswordJob implements ShouldQueue
         AuditLogService $auditLog,
         SlackApprovalService $slackApproval,
     ): void {
-        DB::transaction(function () use (
+        $this->runTransactionally(function () use (
             $directoryService,
             $pendingPasswords,
             $auditLog,
@@ -112,8 +112,27 @@ class ResetGooglePasswordJob implements ShouldQueue
         });
     }
 
+    /**
+     * @template TReturn
+     *
+     * @param  callable(): TReturn  $callback
+     * @return TReturn
+     */
+    private function runTransactionally(callable $callback)
+    {
+        if (DB::transactionLevel() > 0) {
+            return $callback();
+        }
+
+        return DB::transaction($callback);
+    }
+
     private function forceChangeAtNextLogin(PasswordResetRequest $request): bool
     {
+        if ($request->office_verified_at !== null) {
+            return true;
+        }
+
         $type = $request->pending_password_type;
 
         if ($type === PendingPasswordType::StudentSelected->value) {
