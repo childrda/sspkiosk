@@ -7,6 +7,8 @@ use Database\Factories\PasswordResetRequestFactory;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 
 class PasswordResetRequest extends Model
 {
@@ -83,9 +85,30 @@ class PasswordResetRequest extends Model
 
     public function hasEncryptedPendingPassword(): bool
     {
+        $active = $this->relationLoaded('activeRevision')
+            ? $this->activeRevision
+            : $this->activeRevision()->first();
+
+        if ($active !== null) {
+            return $active->hasEncryptedPendingPassword();
+        }
+
         return $this->encrypted_pending_password !== null
             && $this->encrypted_pending_password !== ''
             && $this->pending_password_deleted_at === null;
+    }
+
+    public function revisions(): HasMany
+    {
+        return $this->hasMany(PasswordResetRevision::class)->orderBy('revision_number');
+    }
+
+    public function activeRevision(): HasOne
+    {
+        return $this->hasOne(PasswordResetRevision::class)
+            ->whereNull('superseded_at')
+            ->where('status', \App\Enums\PasswordResetRevisionStatus::Active->value)
+            ->whereNotNull('active_for_request_id');
     }
 
     public function student(): BelongsTo

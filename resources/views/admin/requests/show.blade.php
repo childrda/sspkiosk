@@ -137,29 +137,123 @@
         </div>
     @endif
 
-    @if ($resetRequest->status === PasswordResetRequestStatus::Failed)
-        <div class="card">
-            <h2>Retry directory reset</h2>
-            <p>Retry mints a new office-generated temporary password and writes it to Google Workspace and Active Directory.</p>
-            <form method="post" action="{{ route('admin.requests.retry-reset', $resetRequest) }}" onsubmit="return confirm('Retry the directory password reset with a new password?');">
+    @if (! empty($showRetryDirectories))
+        <div class="card" style="border-left:4px solid #2563eb;">
+            <h2>Retry failed directories</h2>
+            <p>Retries the <strong>same</strong> encrypted password against directories that have not succeeded. Successful directories are never rewritten.</p>
+            <form method="post" action="{{ route('admin.requests.retry-reset', $resetRequest) }}" onsubmit="return confirm('Retry failed directories with the existing password?');">
                 @csrf
-                <button type="submit" class="btn btn-primary">Retry reset</button>
+                <button type="submit" class="btn btn-primary">Retry failed directories</button>
             </form>
+        </div>
+    @endif
+
+    @if (! empty($showReplacePassword))
+        <div class="card" style="border-left:4px solid #c2410c;">
+            <h2>Replace password in all directories</h2>
+            <p style="color:#9a3412;">
+                Google already accepted the student's previous password. Replacing it will change the password in
+                Google Workspace and Active Directory. The student's currently working Google password will stop working.
+            </p>
+            <p>After confirmation, the student must return to the kiosk and choose a <strong>different</strong> password. This is not a one-click Slack action.</p>
+            <form method="post" action="{{ route('admin.requests.start-replacement', $resetRequest) }}">
+                @csrf
+                <label>
+                    Type <code>REPLACE PASSWORD</code> to confirm
+                    <input type="text" name="confirmation" required autocomplete="off" style="width:100%;max-width:24rem;padding:0.5rem;border:1px solid #d1d5db;border-radius:6px;">
+                </label>
+                <label>
+                    Reason (required)
+                    <textarea name="reason" rows="3" required style="width:100%;max-width:36rem;padding:0.5rem;border:1px solid #d1d5db;border-radius:6px;"></textarea>
+                </label>
+                <button type="submit" class="btn btn-danger">Start password replacement</button>
+            </form>
+        </div>
+    @endif
+
+    @if ($resetRequest->status === PasswordResetRequestStatus::Failed && empty($showRetryDirectories) && empty($showReplacePassword))
+        <div class="card">
+            <h2>Office temporary re-issue</h2>
+            <p>Mints a new office-generated temporary password and writes it to both directories (forces change at next login).</p>
+            <form method="post" action="{{ route('admin.requests.retry-reset', $resetRequest) }}" onsubmit="return confirm('Issue a new office temporary password?');">
+                @csrf
+                <button type="submit" class="btn btn-primary">Issue office temporary password</button>
+            </form>
+        </div>
+    @endif
+
+    @if ($resetRequest->status === PasswordResetRequestStatus::AwaitingPasswordReselection)
+        <div class="card">
+            <h2>Awaiting kiosk re-selection</h2>
+            <p>
+                The password you selected was accepted by Google but could not be used for your school computer account.
+                Have the student return to the kiosk, look up again if needed, and choose a different password so the same
+                password can be applied to both Google and Windows.
+            </p>
         </div>
     @endif
 
     @if ($resetRequest->status === PasswordResetRequestStatus::PartiallyCompleted)
         <div class="card">
             <h2>Partial completion</h2>
-            <p>
-                At least one directory succeeded and at least one did not. Student-selected passwords are retained for
-                recovery (Prompt 2). Active Directory policy rejection means the student must choose a different password.
-            </p>
-            @if ($resetRequest->retry_available)
-                <p class="muted">A manual or automatic retry remains available for the current encrypted password.</p>
-            @endif
+            <p>At least one directory succeeded and at least one did not. Use retry or replace above — they have different consequences.</p>
         </div>
     @endif
+
+    @if (! empty($showCancel))
+        <div class="card" style="border-left:4px solid #6b7280;">
+            <h2>Cancel / abandon request</h2>
+            <p>Deletes the active encrypted password, stops directory execution, and tells staff the student must start a new request.</p>
+            <form method="post" action="{{ route('admin.requests.cancel', $resetRequest) }}">
+                @csrf
+                <label>
+                    Type <code>CANCEL REQUEST</code> to confirm
+                    <input type="text" name="confirmation" required autocomplete="off" style="width:100%;max-width:24rem;padding:0.5rem;border:1px solid #d1d5db;border-radius:6px;">
+                </label>
+                <label>
+                    Reason (required)
+                    <textarea name="reason" rows="2" required style="width:100%;max-width:36rem;padding:0.5rem;border:1px solid #d1d5db;border-radius:6px;"></textarea>
+                </label>
+                <button type="submit" class="btn btn-secondary">Cancel request</button>
+            </form>
+        </div>
+    @endif
+
+    <div class="card">
+        <h2>Revision history</h2>
+        @forelse ($resetRequest->revisions as $revision)
+            <div style="border-top:1px solid #e5e7eb;padding:0.75rem 0;">
+                <p>
+                    <strong>Revision {{ $revision->revision_number }}</strong>
+                    <span class="badge badge-{{ $revision->status->value }}">{{ str_replace('_', ' ', $revision->status->value) }}</span>
+                </p>
+                <p class="muted">
+                    Origin: {{ $revision->password_origin ?? '—' }}
+                    · Mode: {{ $revision->password_mode ?? '—' }}
+                    · Force change: {{ $revision->force_change_at_next_login === null ? '—' : ($revision->force_change_at_next_login ? 'yes' : 'no') }}
+                    · Created: {{ $revision->created_at?->toDateTimeString() }}
+                    @if ($revision->superseded_at)
+                        · Superseded: {{ $revision->superseded_at->toDateTimeString() }}
+                    @endif
+                    · Retry: {{ $revision->retry_available ? 'yes' : 'no' }}
+                </p>
+                @if (is_array($revision->directory_results['results'] ?? null))
+                    <ul>
+                        @foreach ($revision->directory_results['results'] as $directory => $result)
+                            <li>
+                                {{ str_replace('_', ' ', $directory) }}:
+                                {{ $result['status'] ?? '—' }}
+                                @if (! empty($result['reason'])) ({{ $result['reason'] }}) @endif
+                                @if (! empty($result['attempts'])) — attempts {{ $result['attempts'] }} @endif
+                            </li>
+                        @endforeach
+                    </ul>
+                @endif
+            </div>
+        @empty
+            <p class="muted">No revisions recorded yet.</p>
+        @endforelse
+    </div>
 
     <div class="card" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(14rem,1fr));gap:1rem;">
         @if ($registrationPhoto)

@@ -82,6 +82,12 @@ return [
 
     'label_printing_enabled' => filter_var(env('LABEL_PRINTING_ENABLED', false), FILTER_VALIDATE_BOOL),
 
+    /*
+    | Maximum number of replacement revisions after the initial credential (revision 1).
+    | Blocks endless policy-rejection loops; staff must reconcile manually beyond this.
+    */
+    'max_replacement_revisions' => (int) env('PASSWORD_MAX_REPLACEMENT_REVISIONS', 3),
+
     'registration_requires_kiosk' => filter_var(
         env('REGISTRATION_REQUIRES_KIOSK', false),
         FILTER_VALIDATE_BOOL

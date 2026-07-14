@@ -45,6 +45,7 @@ trait RunsDirectoryPasswordJobs
             app(PendingPasswordService::class),
             app(AuditLogService::class),
             app(SlackApprovalService::class),
+            app(\App\Services\PasswordRevisionService::class),
         );
 
         (new ResetDirectoryPasswordsJob($requestId))->handle($coordinator);

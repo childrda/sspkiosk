@@ -334,7 +334,7 @@ class SlackApprovalService
         $adLine = match ($ad) {
             'success' => 'Active Directory password reset completed.',
             'failed' => $adReason === 'policy_rejected'
-                ? 'Active Directory rejected the selected password. The student may need to choose a different password (Prompt 2 recovery).'
+                ? 'Active Directory rejected the selected password (policy). An administrator must start password replacement so the student can choose a different password at the kiosk.'
                 : 'Active Directory password reset failed ('.$adReason.').',
             'skipped' => 'Active Directory skipped ('.$adReason.').',
             default => 'Active Directory pending.',

@@ -156,10 +156,15 @@ class LabelPrintingTest extends TestCase
 
         app(PendingPasswordService::class)->store($request, 'ValidPass-1234', PendingPasswordType::TemporaryGenerated);
 
-        $request->forceFill([
+        $request->refresh()->load('activeRevision');
+        $request->activeRevision->forceFill([
             'pending_password_printed_at' => now(),
             'force_change_at_next_login' => true,
         ])->save();
+        app(\App\Services\PasswordRevisionService::class)->projectToRequest(
+            $request,
+            $request->activeRevision->fresh(),
+        );
 
         $forceChange = null;
 

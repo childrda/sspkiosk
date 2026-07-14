@@ -33,6 +33,10 @@ Route::middleware('web')->prefix($prefix)->name('admin.')->group(function () {
             ->name('requests.office-reject');
         Route::post('requests/{passwordResetRequest}/retry-reset', [PasswordResetRequestController::class, 'retryReset'])
             ->name('requests.retry-reset');
+        Route::post('requests/{passwordResetRequest}/start-replacement', [PasswordResetRequestController::class, 'startReplacement'])
+            ->name('requests.start-replacement');
+        Route::post('requests/{passwordResetRequest}/cancel', [PasswordResetRequestController::class, 'cancel'])
+            ->name('requests.cancel');
 
         Route::get('kiosks', [KioskController::class, 'index'])->name('kiosks.index');
         Route::post('kiosks', [KioskController::class, 'store'])->name('kiosks.store');

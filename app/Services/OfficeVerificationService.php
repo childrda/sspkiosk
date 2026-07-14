@@ -18,6 +18,7 @@ class OfficeVerificationService
         private readonly PendingPasswordService $pendingPasswords,
         private readonly AuditLogService $auditLog,
         private readonly SlackApprovalService $slackApproval,
+        private readonly PasswordRevisionService $revisions,
     ) {}
 
     public function verify(PasswordResetRequest $request, User $admin, ?string $notes): string
@@ -38,17 +39,10 @@ class OfficeVerificationService
 
             $plain = $this->passwords->generate();
             $superseded = $locked->password_origin === PasswordOrigin::StudentSelected->value
-                || $locked->pending_password_type === PendingPasswordType::StudentSelected->value;
+                || $locked->pending_password_type === PendingPasswordType::StudentSelected->value
+                || ($locked->activeRevision?->password_origin === PasswordOrigin::StudentSelected->value);
 
-            $this->pendingPasswords->store(
-                $locked,
-                $plain,
-                PendingPasswordType::TemporaryGenerated,
-                PasswordOrigin::OfficeGeneratedTemporary,
-                true,
-                $superseded,
-                $locked->reset_mode,
-            );
+            $this->revisions->createOfficeGeneratedRevision($locked, $plain, $superseded);
 
             $locked->forceFill([
                 'office_verified_at' => now(),
@@ -109,6 +103,9 @@ class OfficeVerificationService
         });
     }
 
+    /**
+     * Legacy Failed-path mint (office temporary). Prefer retryFailedDirectories for same-password retries.
+     */
     public function retry(PasswordResetRequest $request, User $admin): string
     {
         $this->assertQueueHealthy();
@@ -123,20 +120,11 @@ class OfficeVerificationService
             }
 
             if ($locked->status !== PasswordResetRequestStatus::Failed) {
-                throw new ConflictHttpException('Only failed reset requests can be retried.');
+                throw new ConflictHttpException('Only failed reset requests can use office password re-issue.');
             }
 
             $plain = $this->passwords->generate();
-
-            $this->pendingPasswords->store(
-                $locked,
-                $plain,
-                PendingPasswordType::TemporaryGenerated,
-                PasswordOrigin::OfficeGeneratedTemporary,
-                true,
-                false,
-                $locked->reset_mode,
-            );
+            $this->revisions->createOfficeGeneratedRevision($locked, $plain, false);
 
             $locked->forceFill([
                 'status' => PasswordResetRequestStatus::ApprovedProcessing,

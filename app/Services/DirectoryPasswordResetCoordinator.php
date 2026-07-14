@@ -5,8 +5,10 @@ namespace App\Services;
 use App\Contracts\DirectoryPasswordResetter;
 use App\Enums\DirectoryRetryMode;
 use App\Enums\PasswordResetRequestStatus;
+use App\Enums\PasswordResetRevisionStatus;
 use App\Exceptions\DirectoryResetException;
 use App\Models\PasswordResetRequest;
+use App\Models\PasswordResetRevision;
 use App\Support\DirectoryResetOutcome;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -24,6 +26,7 @@ class DirectoryPasswordResetCoordinator
         private readonly PendingPasswordService $pendingPasswords,
         private readonly AuditLogService $auditLog,
         private readonly SlackApprovalService $slackApproval,
+        private readonly PasswordRevisionService $revisions,
     ) {}
 
     public function process(int $passwordResetRequestId): DirectoryResetOutcome
@@ -33,7 +36,7 @@ class DirectoryPasswordResetCoordinator
         $claimed = $this->claimNextDirectory($passwordResetRequestId);
 
         while ($claimed !== null) {
-            $this->executeClaim($claimed['request_id'], $claimed['directory_key'], $claimed['force_change']);
+            $this->executeClaim($claimed['request_id'], $claimed['revision_id'], $claimed['directory_key'], $claimed['force_change']);
             $claimed = $this->claimNextDirectory($passwordResetRequestId);
         }
 
@@ -41,7 +44,7 @@ class DirectoryPasswordResetCoordinator
     }
 
     /**
-     * @return array{request_id: int, directory_key: string, force_change: bool}|null
+     * @return array{request_id: int, revision_id: int, directory_key: string, force_change: bool}|null
      */
     private function claimNextDirectory(int $requestId): ?array
     {
@@ -59,13 +62,21 @@ class DirectoryPasswordResetCoordinator
                 return null;
             }
 
-            if ($this->pendingPasswordExpired($request)) {
-                $this->expirePendingCredential($request);
+            $revision = $this->revisions->activeRevision($request);
+
+            if ($revision === null) {
+                return null;
+            }
+
+            // Authority: revision fields win even if request projection diverges.
+            if ($revision->pendingPasswordExpired()) {
+                $this->expirePendingCredential($request, $revision);
 
                 return null;
             }
 
-            if (! $this->pendingPasswords->hasEncryptedPendingPassword($request)) {
+            if (! $revision->hasEncryptedPendingPassword()) {
+                $revision->forceFill(['retry_available' => false])->save();
                 $request->forceFill([
                     'status' => PasswordResetRequestStatus::Failed,
                     'retry_available' => false,
@@ -73,62 +84,66 @@ class DirectoryPasswordResetCoordinator
                     'google_reset_success' => false,
                     'google_error_message' => 'Pending password unavailable.',
                 ])->save();
+                $this->revisions->projectToRequest($request, $revision);
 
                 return null;
             }
 
-            $this->ensureDirectorySnapshot($request);
-            $this->reclaimStaleProcessing($request);
+            $this->ensureDirectorySnapshot($request, $revision);
+            $this->reclaimStaleProcessing($request, $revision);
 
-            $key = $this->selectNextDirectoryKey($request);
+            $key = $this->selectNextDirectoryKey($revision);
 
             if ($key === null) {
-                $this->recalculateStatusAndRetry($request);
-                $this->syncLegacyGoogleColumns($request);
+                $this->recalculateStatusAndRetry($request, $revision);
+                $this->syncLegacyGoogleColumns($request, $revision);
+                $revision->save();
                 $request->save();
+                $this->revisions->projectToRequest($request, $revision);
 
                 return null;
             }
 
-            $results = $request->directory_results ?? [];
+            $results = $revision->directory_results ?? [];
             $results['results'][$key]['status'] = 'processing';
             $results['results'][$key]['processing_started_at'] = now()->toIso8601String();
-            $request->directory_results = $results;
-            $request->save();
+            $revision->directory_results = $results;
+            $revision->save();
+            $this->revisions->projectToRequest($request, $revision);
 
             return [
                 'request_id' => $request->id,
+                'revision_id' => $revision->id,
                 'directory_key' => $key,
-                'force_change' => (bool) $request->force_change_at_next_login,
+                'force_change' => (bool) $revision->force_change_at_next_login,
             ];
         });
     }
 
-    private function executeClaim(int $requestId, string $directoryKey, bool $forceChange): void
+    private function executeClaim(int $requestId, int $revisionId, string $directoryKey, bool $forceChange): void
     {
         $request = PasswordResetRequest::query()->with('student')->find($requestId);
+        $revision = PasswordResetRevision::query()->find($revisionId);
 
-        if ($request === null) {
+        if ($request === null || $revision === null) {
             return;
         }
 
-        $plainPassword = $this->pendingPasswords->decrypt($request);
+        $plainPassword = $this->pendingPasswords->decryptRevision($revision);
 
         if ($plainPassword === null) {
-            DB::transaction(function () use ($requestId, $directoryKey): void {
+            DB::transaction(function () use ($requestId, $revisionId, $directoryKey): void {
                 $locked = PasswordResetRequest::query()->lockForUpdate()->find($requestId);
-                if ($locked === null) {
+                $revision = PasswordResetRevision::query()->lockForUpdate()->find($revisionId);
+                if ($locked === null || $revision === null) {
                     return;
                 }
-                $this->recordFailure(
-                    $locked,
-                    $directoryKey,
-                    'unexpected_error',
-                    DirectoryRetryMode::None,
-                );
-                $this->recalculateStatusAndRetry($locked);
-                $this->syncLegacyGoogleColumns($locked);
+                $this->recordFailure($revision, $directoryKey, 'unexpected_error', DirectoryRetryMode::None);
+                $this->recalculateStatusAndRetry($locked, $revision);
+                $this->syncLegacyGoogleColumns($locked, $revision);
+                $revision->save();
                 $locked->save();
+                $this->revisions->projectToRequest($locked, $revision);
             });
 
             return;
@@ -147,13 +162,14 @@ class DirectoryPasswordResetCoordinator
 
             $resetter->resetPassword($request->student, $plainPassword, $forceChange);
 
-            DB::transaction(function () use ($requestId, $directoryKey): void {
+            DB::transaction(function () use ($requestId, $revisionId, $directoryKey): void {
                 $locked = PasswordResetRequest::query()->lockForUpdate()->with('student')->find($requestId);
-                if ($locked === null) {
+                $revision = PasswordResetRevision::query()->lockForUpdate()->find($revisionId);
+                if ($locked === null || $revision === null) {
                     return;
                 }
 
-                $results = $locked->directory_results ?? [];
+                $results = $revision->directory_results ?? [];
                 if (($results['results'][$directoryKey]['status'] ?? null) !== 'processing') {
                     return;
                 }
@@ -168,20 +184,38 @@ class DirectoryPasswordResetCoordinator
                     'processing_started_at' => null,
                     'completed_at' => now()->toIso8601String(),
                 ]);
-                $locked->directory_results = $results;
-                $this->recalculateStatusAndRetry($locked);
-                $this->syncLegacyGoogleColumns($locked);
+                $revision->directory_results = $results;
+                $this->recalculateStatusAndRetry($locked, $revision);
+                $this->syncLegacyGoogleColumns($locked, $revision);
 
                 if ($locked->status === PasswordResetRequestStatus::Completed) {
-                    $this->pendingPasswords->delete($locked, 'approval');
+                    $this->pendingPasswords->deleteRevision($revision, 'approval');
+                    $revision->forceFill([
+                        'status' => PasswordResetRevisionStatus::Completed,
+                        'retry_available' => false,
+                        'active_for_request_id' => null,
+                    ])->save();
+                    $this->auditLog->logSystem('password_revision.completed', 'password_reset_request', (string) $locked->id, [
+                        'revision_number' => $revision->revision_number,
+                    ]);
                 }
 
+                $revision->save();
                 $locked->save();
+                $this->revisions->projectToRequest($locked, $revision->fresh());
 
                 $this->auditLog->logSystem('directory.reset.success', 'password_reset_request', (string) $locked->id, [
                     'student_id' => $locked->student_id,
                     'directory' => $directoryKey,
+                    'revision_number' => $revision->revision_number,
                 ]);
+
+                if ($attempts >= 1) {
+                    $this->auditLog->logSystem('directory.retry.completed', 'password_reset_request', (string) $locked->id, [
+                        'directory' => $directoryKey,
+                        'revision_number' => $revision->revision_number,
+                    ]);
+                }
             });
         } catch (\Throwable $exception) {
             $reason = 'unexpected_error';
@@ -192,27 +226,40 @@ class DirectoryPasswordResetCoordinator
                 $retryMode = $exception->retryMode;
             }
 
-            DB::transaction(function () use ($requestId, $directoryKey, $reason, $retryMode): void {
+            DB::transaction(function () use ($requestId, $revisionId, $directoryKey, $reason, $retryMode): void {
                 $locked = PasswordResetRequest::query()->lockForUpdate()->find($requestId);
-                if ($locked === null) {
+                $revision = PasswordResetRevision::query()->lockForUpdate()->find($revisionId);
+                if ($locked === null || $revision === null) {
                     return;
                 }
 
-                if (($locked->directory_results['results'][$directoryKey]['status'] ?? null) !== 'processing') {
+                if (($revision->directory_results['results'][$directoryKey]['status'] ?? null) !== 'processing') {
                     return;
                 }
 
-                $this->recordFailure($locked, $directoryKey, $reason, $retryMode);
-                $this->recalculateStatusAndRetry($locked);
-                $this->syncLegacyGoogleColumns($locked);
+                $this->recordFailure($revision, $directoryKey, $reason, $retryMode);
+                $this->recalculateStatusAndRetry($locked, $revision);
+                $this->syncLegacyGoogleColumns($locked, $revision);
+                $revision->save();
                 $locked->save();
+                $this->revisions->projectToRequest($locked, $revision);
 
                 $this->auditLog->logSystem('directory.reset.failed', 'password_reset_request', (string) $locked->id, [
                     'student_id' => $locked->student_id,
                     'directory' => $directoryKey,
                     'reason' => $reason,
                     'retry_mode' => $retryMode->value,
+                    'revision_number' => $revision->revision_number,
                 ]);
+
+                $attempts = (int) ($revision->directory_results['results'][$directoryKey]['attempts'] ?? 0);
+                if ($attempts > 1) {
+                    $this->auditLog->logSystem('directory.retry.failed', 'password_reset_request', (string) $locked->id, [
+                        'directory' => $directoryKey,
+                        'reason' => $reason,
+                        'revision_number' => $revision->revision_number,
+                    ]);
+                }
             });
 
             Log::error('Directory password reset failed.', [
@@ -248,12 +295,13 @@ class DirectoryPasswordResetCoordinator
     private function buildOutcome(int $requestId): DirectoryResetOutcome
     {
         $request = PasswordResetRequest::query()->find($requestId);
+        $revision = $request?->activeRevision()->first();
 
-        if ($request === null) {
+        if ($revision === null) {
             return new DirectoryResetOutcome(false);
         }
 
-        return new DirectoryResetOutcome($this->hasAutomaticRetryableFailures($request));
+        return new DirectoryResetOutcome($this->hasAutomaticRetryableFailures($revision));
     }
 
     private function isEligible(PasswordResetRequest $request): bool
@@ -264,28 +312,28 @@ class DirectoryPasswordResetCoordinator
         ], true);
     }
 
-    private function pendingPasswordExpired(PasswordResetRequest $request): bool
+    private function expirePendingCredential(PasswordResetRequest $request, PasswordResetRevision $revision): void
     {
-        return $request->pending_password_expires_at !== null
-            && $request->pending_password_expires_at->isPast();
-    }
-
-    private function expirePendingCredential(PasswordResetRequest $request): void
-    {
-        $this->pendingPasswords->delete($request, 'expiration');
+        $this->pendingPasswords->deleteRevision($revision, 'expiration');
+        $revision->forceFill([
+            'retry_available' => false,
+            'status' => PasswordResetRevisionStatus::Failed,
+        ])->save();
         $request->forceFill([
             'retry_available' => false,
             'status' => PasswordResetRequestStatus::Failed,
         ])->save();
+        $this->revisions->projectToRequest($request, $revision);
 
         $this->auditLog->logSystem('password_revision.expired', 'password_reset_request', (string) $request->id, [
             'student_id' => $request->student_id,
+            'revision_number' => $revision->revision_number,
         ]);
     }
 
-    private function ensureDirectorySnapshot(PasswordResetRequest $request): void
+    private function ensureDirectorySnapshot(PasswordResetRequest $request, PasswordResetRevision $revision): void
     {
-        $existing = $request->directory_results;
+        $existing = $revision->directory_results;
 
         if (is_array($existing)
             && isset($existing['planned_directories'], $existing['required_directories'], $existing['results'])
@@ -320,7 +368,7 @@ class DirectoryPasswordResetCoordinator
             $results[$key] = $this->emptyResult('pending');
         }
 
-        $request->directory_results = [
+        $revision->directory_results = [
             'planned_directories' => $planned,
             'required_directories' => $required,
             'results' => $results,
@@ -343,10 +391,10 @@ class DirectoryPasswordResetCoordinator
         ];
     }
 
-    private function reclaimStaleProcessing(PasswordResetRequest $request): void
+    private function reclaimStaleProcessing(PasswordResetRequest $request, PasswordResetRevision $revision): void
     {
         $minutes = (int) config('directory-processing.stale_processing_minutes', 5);
-        $results = $request->directory_results ?? [];
+        $results = $revision->directory_results ?? [];
         $changed = false;
 
         foreach ($results['results'] ?? [] as $key => $result) {
@@ -359,12 +407,6 @@ class DirectoryPasswordResetCoordinator
                 continue;
             }
 
-            if (now()->diffInMinutes(\Carbon\Carbon::parse($started), false) > -$minutes
-                && \Carbon\Carbon::parse($started)->greaterThan(now()->subMinutes($minutes))
-            ) {
-                continue;
-            }
-
             if (\Carbon\Carbon::parse($started)->lessThanOrEqualTo(now()->subMinutes($minutes))) {
                 $results['results'][$key]['status'] = 'pending';
                 $results['results'][$key]['processing_started_at'] = null;
@@ -373,19 +415,20 @@ class DirectoryPasswordResetCoordinator
                 $this->auditLog->logSystem('directory.processing.reclaimed', 'password_reset_request', (string) $request->id, [
                     'directory' => $key,
                     'previous_processing_started_at' => $started,
+                    'revision_number' => $revision->revision_number,
                 ]);
             }
         }
 
         if ($changed) {
-            $request->directory_results = $results;
+            $revision->directory_results = $results;
         }
     }
 
-    private function selectNextDirectoryKey(PasswordResetRequest $request): ?string
+    private function selectNextDirectoryKey(PasswordResetRevision $revision): ?string
     {
-        $results = $request->directory_results['results'] ?? [];
-        $required = $request->directory_results['required_directories'] ?? [];
+        $results = $revision->directory_results['results'] ?? [];
+        $required = $revision->directory_results['required_directories'] ?? [];
 
         foreach ($required as $key) {
             if (isset($this->attemptedThisRun[$key])) {
@@ -400,7 +443,10 @@ class DirectoryPasswordResetCoordinator
             }
 
             if ($status === 'pending'
-                || ($status === 'failed' && $retryMode === DirectoryRetryMode::Automatic->value)
+                || ($status === 'failed' && in_array($retryMode, [
+                    DirectoryRetryMode::Automatic->value,
+                    DirectoryRetryMode::Manual->value,
+                ], true))
             ) {
                 $this->attemptedThisRun[$key] = true;
 
@@ -412,12 +458,12 @@ class DirectoryPasswordResetCoordinator
     }
 
     private function recordFailure(
-        PasswordResetRequest $request,
+        PasswordResetRevision $revision,
         string $directoryKey,
         string $reason,
         DirectoryRetryMode $retryMode,
     ): void {
-        $results = $request->directory_results ?? [];
+        $results = $revision->directory_results ?? [];
         $attempts = (int) ($results['results'][$directoryKey]['attempts'] ?? 0);
         $results['results'][$directoryKey] = array_merge($results['results'][$directoryKey] ?? [], [
             'status' => 'failed',
@@ -428,16 +474,17 @@ class DirectoryPasswordResetCoordinator
             'processing_started_at' => null,
             'completed_at' => null,
         ]);
-        $request->directory_results = $results;
+        $revision->directory_results = $results;
     }
 
-    private function recalculateStatusAndRetry(PasswordResetRequest $request): void
+    private function recalculateStatusAndRetry(PasswordResetRequest $request, PasswordResetRevision $revision): void
     {
-        $required = $request->directory_results['required_directories'] ?? [];
-        $results = $request->directory_results['results'] ?? [];
+        $required = $revision->directory_results['required_directories'] ?? [];
+        $results = $revision->directory_results['results'] ?? [];
 
         if ($required === []) {
             $request->status = PasswordResetRequestStatus::Failed;
+            $revision->retry_available = false;
             $request->retry_available = false;
 
             return;
@@ -447,7 +494,6 @@ class DirectoryPasswordResetCoordinator
         $pendingOrProcessing = 0;
         $automaticFailures = 0;
         $terminalFailures = 0;
-        $manualFailures = 0;
 
         foreach ($required as $key) {
             $status = $results[$key]['status'] ?? 'pending';
@@ -460,9 +506,6 @@ class DirectoryPasswordResetCoordinator
             } elseif ($status === 'failed') {
                 if ($retryMode === DirectoryRetryMode::Automatic->value) {
                     $automaticFailures++;
-                } elseif ($retryMode === DirectoryRetryMode::Manual->value) {
-                    $manualFailures++;
-                    $terminalFailures++;
                 } else {
                     $terminalFailures++;
                 }
@@ -481,6 +524,7 @@ class DirectoryPasswordResetCoordinator
             $request->status = PasswordResetRequestStatus::ApprovedProcessing;
         } elseif ($successCount === 0 && $terminalFailures === $requiredCount) {
             $request->status = PasswordResetRequestStatus::Failed;
+            $revision->status = PasswordResetRevisionStatus::Failed;
         } else {
             $request->status = PasswordResetRequestStatus::PartiallyCompleted;
         }
@@ -497,15 +541,16 @@ class DirectoryPasswordResetCoordinator
             }
         }
 
-        $request->retry_available = $hasRetryableDirectory
-            && $this->pendingPasswords->hasEncryptedPendingPassword($request)
-            && ! $this->pendingPasswordExpired($request);
+        $revision->retry_available = $hasRetryableDirectory
+            && $revision->hasEncryptedPendingPassword()
+            && ! $revision->pendingPasswordExpired();
+        $request->retry_available = $revision->retry_available;
     }
 
-    private function hasAutomaticRetryableFailures(PasswordResetRequest $request): bool
+    private function hasAutomaticRetryableFailures(PasswordResetRevision $revision): bool
     {
-        $required = $request->directory_results['required_directories'] ?? [];
-        $results = $request->directory_results['results'] ?? [];
+        $required = $revision->directory_results['required_directories'] ?? [];
+        $results = $revision->directory_results['results'] ?? [];
 
         foreach ($required as $key) {
             if (($results[$key]['status'] ?? null) !== 'failed') {
@@ -519,9 +564,9 @@ class DirectoryPasswordResetCoordinator
         return false;
     }
 
-    private function syncLegacyGoogleColumns(PasswordResetRequest $request): void
+    private function syncLegacyGoogleColumns(PasswordResetRequest $request, PasswordResetRevision $revision): void
     {
-        $google = $request->directory_results['results']['google'] ?? null;
+        $google = $revision->directory_results['results']['google'] ?? null;
 
         if (! is_array($google)) {
             return;

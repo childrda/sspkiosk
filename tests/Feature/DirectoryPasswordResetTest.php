@@ -51,6 +51,7 @@ class DirectoryPasswordResetTest extends TestCase
             app(PendingPasswordService::class),
             app(AuditLogService::class),
             app(SlackApprovalService::class),
+            app(\App\Services\PasswordRevisionService::class),
         );
 
         (new ResetDirectoryPasswordsJob($request->id))->handle($coordinator);
@@ -189,6 +190,7 @@ class DirectoryPasswordResetTest extends TestCase
             app(PendingPasswordService::class),
             app(AuditLogService::class),
             app(SlackApprovalService::class),
+            app(\App\Services\PasswordRevisionService::class),
         );
         $job->handle($coordinator);
 

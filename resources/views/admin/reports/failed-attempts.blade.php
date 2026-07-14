@@ -35,6 +35,40 @@
     </div>
 
     <div class="card">
+        <h2>Split-directory cases</h2>
+        <p class="muted">Google and Active Directory did not both succeed. Manual reconciliation may be required after partial or expired failures.</p>
+        @if ($splitDirectoryCases->isEmpty())
+            <p class="muted">None open.</p>
+        @else
+            <table>
+                <thead>
+                    <tr>
+                        <th>Updated</th>
+                        <th>Student</th>
+                        <th>Status</th>
+                        <th>Google</th>
+                        <th>Active Directory</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach ($splitDirectoryCases as $request)
+                        @php
+                            $results = $request->directory_results['results'] ?? [];
+                        @endphp
+                        <tr>
+                            <td>{{ $request->updated_at?->format('Y-m-d H:i') }}</td>
+                            <td><a href="{{ route('admin.requests.show', $request) }}">{{ $request->student->name }}</a></td>
+                            <td>{{ $request->status->value }}</td>
+                            <td>{{ $results['google']['status'] ?? '—' }}{{ isset($results['google']['reason']) ? ' ('.$results['google']['reason'].')' : '' }}</td>
+                            <td>{{ $results['active_directory']['status'] ?? '—' }}{{ isset($results['active_directory']['reason']) ? ' ('.$results['active_directory']['reason'].')' : '' }}</td>
+                        </tr>
+                    @endforeach
+                </tbody>
+            </table>
+        @endif
+    </div>
+
+    <div class="card">
         <h2>Office rejections today</h2>
         <p class="muted">Students who were escalated for office verification but could not be identified in person.</p>
         @if ($officeRejectionsToday->isEmpty())

@@ -12,6 +12,7 @@ enum PasswordResetRequestStatus: string
     case Expired = 'expired';
     case Failed = 'failed';
     case PartiallyCompleted = 'partially_completed';
+    case AwaitingPasswordReselection = 'awaiting_password_reselection';
 
     /** @deprecated Use completed or approved_processing */
     case Approved = 'approved';

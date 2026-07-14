@@ -77,9 +77,29 @@ class DashboardController extends Controller
             ->latest('denied_at')
             ->get();
 
+        $splitDirectoryCases = PasswordResetRequest::query()
+            ->with(['student', 'kiosk', 'activeRevision'])
+            ->where(function ($query): void {
+                $query->where('status', PasswordResetRequestStatus::PartiallyCompleted)
+                    ->orWhere(function ($failed): void {
+                        $failed->where('status', PasswordResetRequestStatus::Failed)
+                            ->whereNotNull('directory_results');
+                    });
+            })
+            ->latest('updated_at')
+            ->limit(50)
+            ->get()
+            ->filter(function (PasswordResetRequest $request): bool {
+                $results = $request->directory_results['results'] ?? [];
+                $statuses = collect($results)->pluck('status');
+
+                return $statuses->contains('success') && $statuses->contains('failed');
+            });
+
         return view('admin.reports.failed-attempts', [
             'failedToday' => $failedToday,
             'officeRejectionsToday' => $officeRejectionsToday,
+            'splitDirectoryCases' => $splitDirectoryCases,
             'studentLockouts' => $studentLockouts,
             'kioskLockouts' => $kioskLockouts,
             'maxStudentAttempts' => config('student-password-reset.max_failed_attempts_per_student'),

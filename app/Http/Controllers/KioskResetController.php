@@ -74,6 +74,29 @@ class KioskResetController extends Controller
             return back()->with('error', config('student-password-reset.reset_lookup_failure_message'));
         }
 
+        $awaitingReselection = PasswordResetRequest::query()
+            ->where('student_id', $student->id)
+            ->where('kiosk_id', $kiosk->id)
+            ->where('status', PasswordResetRequestStatus::AwaitingPasswordReselection)
+            ->latest('id')
+            ->first();
+
+        if ($awaitingReselection !== null) {
+            $request->session()->put(config('kiosk.reset_session_student_key'), $student->id);
+            $request->session()->put(config('kiosk.active_reset_request_session_key'), $awaitingReselection->id);
+            $request->session()->forget([
+                config('kiosk.reset_session_questions_key'),
+                config('kiosk.reset_session_photo_key'),
+            ]);
+
+            $this->auditLog->logStudent('kiosk.reset.lookup_success', $student->id, [
+                'kiosk_id' => $kiosk->id,
+                'reselection_request_id' => $awaitingReselection->id,
+            ], $request);
+
+            return redirect()->route('kiosk.reset.password');
+        }
+
         if ($this->kioskReset->hasPendingRequest($student, $kiosk)) {
             return back()->with('error', 'You already have a pending reset request from this kiosk. Please see technology staff.');
         }
@@ -219,8 +242,18 @@ class KioskResetController extends Controller
             return redirect()->route('kiosk.reset.index');
         }
 
+        /** @var Kiosk|null $kiosk */
+        $kiosk = $request->attributes->get('kiosk');
+        $awaitingReselection = $kiosk !== null
+            && PasswordResetRequest::query()
+                ->where('student_id', $student->id)
+                ->where('kiosk_id', $kiosk->id)
+                ->where('status', PasswordResetRequestStatus::AwaitingPasswordReselection)
+                ->exists();
+
         return view('kiosk.reset.password', [
             'minLength' => config('student-password-reset.password_policy.min_length'),
+            'isReselection' => $awaitingReselection,
         ]);
     }
 
@@ -234,15 +267,6 @@ class KioskResetController extends Controller
             return redirect()->route('kiosk.reset.index');
         }
 
-        $photoId = $request->session()->get(config('kiosk.reset_session_photo_key'));
-        $presented = $request->session()->get(config('kiosk.reset_session_questions_key'), []);
-        $photo = $student->photos()->find($photoId);
-
-        if (! $photo || $presented === []) {
-            return redirect()->route('kiosk.reset.index')
-                ->with('error', 'Your session expired. Please start again.');
-        }
-
         $validator = $this->studentPasswordValidator->validateForStudent(
             $request->input('password'),
             $request->input('password_confirmation'),
@@ -251,6 +275,38 @@ class KioskResetController extends Controller
 
         if ($validator->fails()) {
             return back()->withErrors($validator)->withInput();
+        }
+
+        $awaiting = PasswordResetRequest::query()
+            ->where('student_id', $student->id)
+            ->where('kiosk_id', $kiosk->id)
+            ->where('status', PasswordResetRequestStatus::AwaitingPasswordReselection)
+            ->latest('id')
+            ->first();
+
+        if ($awaiting !== null) {
+            app(\App\Services\PasswordRevisionService::class)
+                ->storeReselectionPassword($awaiting, (string) $request->input('password'));
+
+            \App\Jobs\SendSlackResetApprovalJob::dispatch($awaiting->id);
+
+            $this->clearResetSession($request);
+            $request->session()->forget(config('kiosk.reset_session_challenge_score_key'));
+            $request->session()->put(
+                config('kiosk.active_reset_request_session_key'),
+                $awaiting->id,
+            );
+
+            return redirect()->route('kiosk.reset.submitted', $awaiting->fresh());
+        }
+
+        $photoId = $request->session()->get(config('kiosk.reset_session_photo_key'));
+        $presented = $request->session()->get(config('kiosk.reset_session_questions_key'), []);
+        $photo = $student->photos()->find($photoId);
+
+        if (! $photo || $presented === []) {
+            return redirect()->route('kiosk.reset.index')
+                ->with('error', 'Your session expired. Please start again.');
         }
 
         $resetRequest = $this->kioskReset->createStudentSelectedRequest(
@@ -348,6 +404,15 @@ class KioskResetController extends Controller
             'pending_password_printed_at' => now(),
             'force_change_at_next_login' => true,
         ])->save();
+
+        $active = $resetRequest->activeRevision;
+        if ($active !== null) {
+            $active->forceFill([
+                'pending_password_printed_at' => now(),
+                'force_change_at_next_login' => true,
+            ])->save();
+            app(\App\Services\PasswordRevisionService::class)->projectToRequest($resetRequest->fresh(), $active->fresh());
+        }
 
         $this->auditLog->logStudent(
             'password.label_printed',
