@@ -41,6 +41,7 @@ class KioskResetController extends Controller
     {
         return view('kiosk.reset.index', [
             'notice' => config('student-password-reset.reset_notice'),
+            'enableIdleReload' => true,
         ]);
     }
 

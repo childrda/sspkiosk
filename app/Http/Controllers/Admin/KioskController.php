@@ -34,6 +34,7 @@ class KioskController extends Controller
             ->get()
             ->map(function (Kiosk $kiosk): Kiosk {
                 $kiosk->setAttribute('last_seen_is_fresh', $this->adminKiosks->lastSeenIsFresh($kiosk));
+                $kiosk->setAttribute('last_seen_status', $this->adminKiosks->lastSeenStatus($kiosk));
 
                 return $kiosk;
             });
@@ -57,6 +58,7 @@ class KioskController extends Controller
         return view('admin.kiosks.show', [
             'kiosk' => $kiosk,
             'lastSeenIsFresh' => $this->adminKiosks->lastSeenIsFresh($kiosk),
+            'lastSeenStatus' => $this->adminKiosks->lastSeenStatus($kiosk),
             'isEnrolled' => $kiosk->enrolled_at !== null,
             'isDeviceAgent' => $kiosk->enrollment_type === KioskEnrollmentType::DeviceAgent,
             'recentRequests' => $recentRequests,

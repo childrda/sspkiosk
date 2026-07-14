@@ -35,5 +35,17 @@ return Application::configure(basePath: dirname(__DIR__))
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {
-        //
+        $exceptions->respond(function ($response, \Throwable $e, \Illuminate\Http\Request $request) {
+            if (
+                $response->getStatusCode() === 419
+                && $request->is('kiosk/*')
+                && ! $request->expectsJson()
+            ) {
+                return redirect()
+                    ->route('kiosk.reset.index')
+                    ->with('error', 'This screen timed out. Please start again.');
+            }
+
+            return $response;
+        });
     })->create();

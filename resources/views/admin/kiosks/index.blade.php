@@ -54,9 +54,11 @@
                         <td>
                             @if ($kiosk->last_seen_at)
                                 {{ $kiosk->last_seen_at->diffForHumans() }}
-                                @unless ($kiosk->last_seen_is_fresh)
+                                @if ($kiosk->last_seen_status === 'stale')
                                     <span class="badge badge-expired">stale</span>
-                                @endunless
+                                @elseif ($kiosk->last_seen_status === 'asleep')
+                                    <span class="badge badge-asleep">asleep</span>
+                                @endif
                             @else
                                 Never
                             @endif

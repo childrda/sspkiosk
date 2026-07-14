@@ -41,4 +41,14 @@ return [
 
     'status_poll_interval_seconds' => (int) env('KIOSK_STATUS_POLL_INTERVAL_SECONDS', 5),
 
+    /*
+    | Staleness of last_seen_at is only meaningful during school hours.
+    | Outside this window, ChromeOS sleep is expected and kiosks show as "Asleep".
+    */
+    'staleness_window' => [
+        'start' => env('KIOSK_STALENESS_WINDOW_START', '07:00'),
+        'end' => env('KIOSK_STALENESS_WINDOW_END', '16:00'),
+        'timezone' => env('KIOSK_STALENESS_TIMEZONE', 'America/New_York'),
+    ],
+
 ];

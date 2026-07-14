@@ -89,15 +89,60 @@
         const HB_URL = @json(route('kiosk.session-heartbeat'));
         const HB_MS = {{ (int) config('kiosk.heartbeat_interval_seconds') * 1000 }};
         const TOKEN = @json(csrf_token());
-        const beat = () => fetch(HB_URL, {
-            method: 'POST',
-            headers: {'X-CSRF-TOKEN': TOKEN, 'Accept': 'application/json'},
-            credentials: 'same-origin',
-            keepalive: true,
-        }).catch(() => {});
+        const RELOAD_FLOOR_MS = 30000;
+        const RELOAD_AT_KEY = 'ssp_kiosk_last_reload_at';
+        let reloading = false;
+
+        const mayReload = () => {
+            const last = Number(sessionStorage.getItem(RELOAD_AT_KEY) || '0');
+            return Date.now() - last >= RELOAD_FLOOR_MS;
+        };
+
+        const softReload = () => {
+            if (reloading || ! mayReload()) {
+                return;
+            }
+            reloading = true;
+            sessionStorage.setItem(RELOAD_AT_KEY, String(Date.now()));
+            location.reload();
+        };
+
+        const beat = () => {
+            if (reloading) {
+                return;
+            }
+
+            fetch(HB_URL, {
+                method: 'POST',
+                headers: {'X-CSRF-TOKEN': TOKEN, 'Accept': 'application/json'},
+                credentials: 'same-origin',
+                keepalive: true,
+            }).then(res => {
+                if (res.status === 419 || res.status === 401 || res.redirected) {
+                    softReload();
+                }
+            }).catch(() => {});
+        };
+
         beat();
         setInterval(beat, HB_MS);
         document.addEventListener('visibilitychange', () => { if (!document.hidden) beat(); });
+        window.addEventListener('focus', beat);
+        window.addEventListener('pageshow', beat);
+        window.addEventListener('online', beat);
+
+        @if (! empty($enableIdleReload))
+        let idleTimer;
+        const IDLE_MS = 15 * 60 * 1000;
+        const resetIdle = () => {
+            clearTimeout(idleTimer);
+            idleTimer = setTimeout(() => location.reload(), IDLE_MS);
+        };
+        ['touchstart', 'mousedown', 'keydown'].forEach(evt =>
+            document.addEventListener(evt, resetIdle, { passive: true })
+        );
+        resetIdle();
+        @endif
     </script>
 </body>
 </html>

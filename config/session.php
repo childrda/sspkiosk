@@ -30,9 +30,15 @@ return [
     | to expire immediately when the browser is closed then you may
     | indicate that via the expire_on_close configuration option.
     |
+    | Default 1440 (24h) for kiosk Chromebooks: the session only holds the
+    | kiosk_id binding (no student credentials / PII). Overnight sleep still
+    | expires weekend sessions — the self-healing session-heartbeat reload
+    | in layouts/kiosk.blade.php is what recovers a dead CSRF token on wake.
+    | Do not "harden" this back to 120 without that wake path in place.
+    |
     */
 
-    'lifetime' => (int) env('SESSION_LIFETIME', 120),
+    'lifetime' => (int) env('SESSION_LIFETIME', 1440),
 
     'expire_on_close' => env('SESSION_EXPIRE_ON_CLOSE', false),
 

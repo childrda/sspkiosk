@@ -21,14 +21,16 @@
             @if ($kiosk->last_seen_at)
                 {{ $kiosk->last_seen_at->toDateTimeString() }}
                 ({{ $kiosk->last_seen_at->diffForHumans() }})
-                @unless ($lastSeenIsFresh)
+                @if ($lastSeenStatus === 'stale')
                     <span class="badge badge-expired">stale</span>
-                @endunless
+                @elseif ($lastSeenStatus === 'asleep')
+                    <span class="badge badge-asleep">asleep</span>
+                @endif
             @else
                 Never
             @endif
         </p>
-        <p class="muted">Last seen is advisory only and does not gate kiosk access.</p>
+        <p class="muted">Last seen is advisory only and does not gate kiosk access. Outside school hours, a sleeping Chromebook shows as asleep rather than stale.</p>
         <p><strong>Location:</strong> {{ $kiosk->location ?? '—' }}</p>
         <p><strong>Allowed IP:</strong> {{ $kiosk->allowed_ip ?? '—' }}</p>
         <p><strong>Allowed subnet:</strong> {{ $kiosk->allowed_subnet ?? '—' }}</p>

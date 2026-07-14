@@ -5,6 +5,8 @@ namespace App\Services;
 use App\Enums\KioskEnrollmentType;
 use App\Enums\KioskStatus;
 use App\Models\Kiosk;
+use Carbon\Carbon;
+use Carbon\CarbonInterface;
 use Illuminate\Support\Facades\DB;
 
 class AdminKioskService
@@ -168,5 +170,37 @@ class AdminKioskService
         return $kiosk->last_seen_at->greaterThan(
             now()->subSeconds(config('kiosk.heartbeat_expires_after_seconds')),
         );
+    }
+
+    /**
+     * Advisory last-seen label for admin UI.
+     *
+     * @return 'fresh'|'stale'|'asleep'|'never'
+     */
+    public function lastSeenStatus(Kiosk $kiosk, ?CarbonInterface $at = null): string
+    {
+        if ($kiosk->last_seen_at === null) {
+            return 'never';
+        }
+
+        if ($this->lastSeenIsFresh($kiosk)) {
+            return 'fresh';
+        }
+
+        if (! $this->isWithinStalenessWindow($at)) {
+            return 'asleep';
+        }
+
+        return 'stale';
+    }
+
+    public function isWithinStalenessWindow(?CarbonInterface $at = null): bool
+    {
+        $timezone = (string) config('kiosk.staleness_window.timezone', 'America/New_York');
+        $moment = Carbon::parse($at ?? now())->timezone($timezone);
+        $start = Carbon::parse($moment->toDateString().' '.config('kiosk.staleness_window.start'), $timezone);
+        $end = Carbon::parse($moment->toDateString().' '.config('kiosk.staleness_window.end'), $timezone);
+
+        return $moment->betweenIncluded($start, $end);
     }
 }
