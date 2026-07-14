@@ -56,6 +56,7 @@
         .badge-denied { background: #fee2e2; color: #991b1b; }
         .badge-needs_office_verification { background: #ede9fe; color: #5b21b6; }
         .badge-failed, .badge-expired { background: #f3f4f6; color: #374151; }
+        .badge-partially_completed { background: #ffedd5; color: #9a3412; }
         .badge-asleep { background: #e0e7ff; color: #3730a3; }
         .flash { padding: 0.75rem 1rem; border-radius: 6px; margin-bottom: 1rem; }
         .flash-status { background: #ecfdf5; border: 1px solid #6ee7b7; }

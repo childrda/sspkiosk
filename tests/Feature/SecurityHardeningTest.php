@@ -3,7 +3,7 @@
 namespace Tests\Feature;
 
 use App\Enums\PasswordResetRequestStatus;
-use App\Jobs\ResetGooglePasswordJob;
+use App\Jobs\ResetDirectoryPasswordsJob;
 use App\Models\AuditLog;
 use App\Models\Kiosk;
 use App\Models\PasswordResetRequest;
@@ -11,7 +11,6 @@ use App\Models\Student;
 use App\Enums\StudentPhotoType;
 use App\Models\StudentPhoto;
 use App\Models\User;
-use App\Services\GoogleWorkspaceDirectoryService;
 use App\Services\KioskCredentialService;
 use App\Services\PasswordGeneratorService;
 use App\Services\SlackApprovalService;
@@ -19,12 +18,15 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Route;
+use Mockery;
+use Tests\Support\RunsDirectoryPasswordJobs;
 use Tests\Support\SignsKioskRequests;
 use Tests\TestCase;
 
 class SecurityHardeningTest extends TestCase
 {
     use RefreshDatabase;
+    use RunsDirectoryPasswordJobs;
     use SignsKioskRequests;
 
     public function test_expired_request_cannot_be_approved_via_slack(): void
@@ -114,6 +116,7 @@ class SecurityHardeningTest extends TestCase
     {
         $forbiddenFragments = [
             'resetPassword',
+            'ResetDirectoryPasswords',
             'ResetGooglePassword',
             'google/password',
             'workspace/password',
@@ -156,15 +159,10 @@ class SecurityHardeningTest extends TestCase
             \App\Enums\PendingPasswordType::TemporaryGenerated,
         );
 
-        $directory = $this->mock(GoogleWorkspaceDirectoryService::class);
+        $directory = Mockery::mock(\App\Contracts\DirectoryPasswordResetter::class);
         $directory->shouldReceive('resetPassword')->once();
 
-        (new ResetGooglePasswordJob($request->id))->handle(
-            $directory,
-            app(\App\Services\PendingPasswordService::class),
-            app(\App\Services\AuditLogService::class),
-            app(SlackApprovalService::class),
-        );
+        $this->runDirectoryPasswordJob($request->id, $directory);
 
         $this->assertFalse($leaked);
     }

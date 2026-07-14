@@ -135,7 +135,53 @@ class ConfigurationValidatorService
             $this->missingRequiredForGooglePasswordReset(),
             $this->missingRequiredForSlack(),
             $this->missingRequiredForKioskReset(),
+            $this->missingRequiredForActiveDirectory(),
         );
+    }
+
+    /**
+     * @return array<string, list<string>>
+     */
+    public function missingRequiredForActiveDirectory(): array
+    {
+        if (! config('active-directory.enabled')) {
+            return [];
+        }
+
+        $missing = $this->missingKeys([
+            'active-directory.hosts' => 'AD_HOSTS',
+            'active-directory.base_dn' => 'AD_BASE_DN',
+            'active-directory.student_ou' => 'AD_STUDENT_OU',
+            'active-directory.username' => 'AD_USERNAME',
+            'active-directory.password' => 'AD_PASSWORD',
+        ]);
+
+        if ((int) config('active-directory.port') !== 636) {
+            $missing['active-directory'][] = 'AD_PORT (must be 636 for LDAPS)';
+        }
+
+        if (! extension_loaded('ldap')) {
+            $missing['active-directory'][] = 'PHP ext-ldap';
+        }
+
+        return $missing;
+    }
+
+    /**
+     * @return list<string>
+     */
+    public function warnings(): array
+    {
+        $warnings = [];
+
+        if (
+            config('student-password-reset.label_printing_enabled')
+            && ResetPasswordMode::tryFromConfig() === ResetPasswordMode::StudentSelectedPendingApproval
+        ) {
+            $warnings[] = 'Password-label printing is disabled for student-selected password requests because the password is a durable credential rather than a temporary password.';
+        }
+
+        return $warnings;
     }
 
     public function isWorkflowConfigured(string $workflow): bool
@@ -146,6 +192,7 @@ class ConfigurationValidatorService
             'google_password_reset' => empty($this->missingRequiredForGooglePasswordReset()),
             'slack' => empty($this->missingRequiredForSlack()),
             'kiosk_reset' => empty($this->missingRequiredForKioskReset()),
+            'active_directory' => empty($this->missingRequiredForActiveDirectory()),
             default => false,
         };
     }

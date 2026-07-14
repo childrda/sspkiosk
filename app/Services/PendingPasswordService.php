@@ -2,7 +2,9 @@
 
 namespace App\Services;
 
+use App\Enums\PasswordOrigin;
 use App\Enums\PendingPasswordType;
+use App\Enums\ResetPasswordMode;
 use App\Models\PasswordResetRequest;
 use Illuminate\Support\Facades\Crypt;
 
@@ -15,11 +17,35 @@ class PendingPasswordService
             && $request->pending_password_deleted_at === null;
     }
 
-    public function store(PasswordResetRequest $request, string $plainPassword, PendingPasswordType $type): void
-    {
+    public function store(
+        PasswordResetRequest $request,
+        string $plainPassword,
+        PendingPasswordType $type,
+        ?PasswordOrigin $origin = null,
+        ?bool $forceChangeAtNextLogin = null,
+        bool $supersededStudentSelected = false,
+        ?string $passwordMode = null,
+    ): void {
         $encrypted = config('student-password-reset.pending_password.encryption_enabled', true)
             ? Crypt::encryptString($plainPassword)
             : $plainPassword;
+
+        $resolvedOrigin = $origin ?? match ($type) {
+            PendingPasswordType::StudentSelected => PasswordOrigin::StudentSelected,
+            PendingPasswordType::TemporaryGenerated => PasswordOrigin::TemporaryGenerated,
+        };
+
+        $resolvedMode = $passwordMode
+            ?? $request->reset_mode
+            ?? ($resolvedOrigin === PasswordOrigin::StudentSelected
+                ? ResetPasswordMode::StudentSelectedPendingApproval->value
+                : ResetPasswordMode::TemporaryGenerated->value);
+
+        $forceChange = $forceChangeAtNextLogin ?? match ($resolvedOrigin) {
+            PasswordOrigin::StudentSelected => (bool) config('student-password-reset.google_force_change_at_next_login.student_selected'),
+            PasswordOrigin::OfficeGeneratedTemporary => true,
+            PasswordOrigin::TemporaryGenerated => (bool) config('student-password-reset.google_force_change_at_next_login.temporary_generated'),
+        };
 
         $request->forceFill([
             'encrypted_pending_password' => $encrypted,
@@ -28,6 +54,16 @@ class PendingPasswordService
             'pending_password_deleted_at' => null,
             'pending_password_expires_at' => $request->expires_at,
             'pending_password_type' => $type->value,
+            'password_mode' => $resolvedMode,
+            'password_origin' => $resolvedOrigin->value,
+            'force_change_at_next_login' => $forceChange,
+            'superseded_student_selected_password' => $supersededStudentSelected
+                || (bool) $request->superseded_student_selected_password,
+            'retry_available' => false,
+            'directory_results' => null,
+            'google_reset_attempted_at' => null,
+            'google_reset_success' => null,
+            'google_error_message' => null,
         ])->save();
     }
 
@@ -73,16 +109,8 @@ class PendingPasswordService
         $request->forceFill([
             'encrypted_pending_password' => null,
             'pending_password_deleted_at' => now(),
+            'retry_available' => false,
         ])->save();
-    }
-
-    public function deleteOnGoogleFailure(PasswordResetRequest $request): void
-    {
-        if (config('student-password-reset.pending_password.retain_on_google_failure', false)) {
-            return;
-        }
-
-        $this->delete($request, 'google_failure');
     }
 
     private function shouldDeleteOn(string $reason): bool
@@ -92,7 +120,6 @@ class PendingPasswordService
             'denial' => config('student-password-reset.pending_password.delete_on_denial', true),
             'escalation' => config('student-password-reset.pending_password.delete_on_denial', true),
             'expiration' => config('student-password-reset.pending_password.delete_on_expiration', true),
-            'google_failure' => config('student-password-reset.pending_password.delete_on_google_failure', true),
             default => true,
         };
     }

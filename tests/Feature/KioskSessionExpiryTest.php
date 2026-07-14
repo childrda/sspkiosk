@@ -109,7 +109,7 @@ class KioskSessionExpiryTest extends TestCase
         $this->configureKioskReset();
 
         $kiosk = $this->browserEnrolledKiosk([
-            'last_seen_at' => now()->subHours(6),
+            'last_seen_at' => Carbon::parse('2026-07-14 04:00:00', 'America/New_York'),
         ]);
 
         $service = app(AdminKioskService::class);

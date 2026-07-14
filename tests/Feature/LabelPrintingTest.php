@@ -4,24 +4,24 @@ namespace Tests\Feature;
 
 use App\Enums\PasswordResetRequestStatus;
 use App\Enums\PendingPasswordType;
-use App\Jobs\ResetGooglePasswordJob;
+use App\Jobs\ResetDirectoryPasswordsJob;
 use App\Models\AuditLog;
 use App\Models\Kiosk;
 use App\Models\PasswordResetRequest;
 use App\Models\Student;
-use App\Services\GoogleWorkspaceDirectoryService;
-use App\Services\KioskCredentialService;
 use App\Services\PendingPasswordService;
 use App\Services\SlackApprovalService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Testing\TestResponse;
 use Mockery;
+use Tests\Support\RunsDirectoryPasswordJobs;
 use Tests\Support\SignsKioskRequests;
 use Tests\TestCase;
 
 class LabelPrintingTest extends TestCase
 {
     use RefreshDatabase;
+    use RunsDirectoryPasswordJobs;
     use SignsKioskRequests;
 
     protected function tearDown(): void
@@ -151,15 +151,19 @@ class LabelPrintingTest extends TestCase
 
         $request = PasswordResetRequest::factory()->create([
             'status' => PasswordResetRequestStatus::ApprovedProcessing,
-            'pending_password_type' => PendingPasswordType::StudentSelected->value,
-            'pending_password_printed_at' => now(),
+            'pending_password_type' => PendingPasswordType::TemporaryGenerated->value,
         ]);
 
-        app(PendingPasswordService::class)->store($request, 'ValidPass-1234', PendingPasswordType::StudentSelected);
+        app(PendingPasswordService::class)->store($request, 'ValidPass-1234', PendingPasswordType::TemporaryGenerated);
+
+        $request->forceFill([
+            'pending_password_printed_at' => now(),
+            'force_change_at_next_login' => true,
+        ])->save();
 
         $forceChange = null;
 
-        $directory = Mockery::mock(GoogleWorkspaceDirectoryService::class);
+        $directory = Mockery::mock(\App\Contracts\DirectoryPasswordResetter::class);
         $directory->shouldReceive('resetPassword')
             ->once()
             ->with(
@@ -172,12 +176,7 @@ class LabelPrintingTest extends TestCase
                 }),
             );
 
-        (new ResetGooglePasswordJob($request->id))->handle(
-            $directory,
-            app(PendingPasswordService::class),
-            app(\App\Services\AuditLogService::class),
-            app(SlackApprovalService::class),
-        );
+        $this->runDirectoryPasswordJob($request->id, $directory);
 
         $this->assertTrue($forceChange);
     }

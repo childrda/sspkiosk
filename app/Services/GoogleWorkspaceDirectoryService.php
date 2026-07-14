@@ -2,14 +2,21 @@
 
 namespace App\Services;
 
+use App\Contracts\DirectoryPasswordResetter;
+use App\Enums\DirectoryRetryMode;
 use App\Exceptions\GoogleWorkspaceException;
 use App\Models\Student;
 use Google\Client as GoogleClient;
 use Google\Service\Directory;
 use Google\Service\Directory\User;
 
-class GoogleWorkspaceDirectoryService
+class GoogleWorkspaceDirectoryService implements DirectoryPasswordResetter
 {
+    public function key(): string
+    {
+        return 'google';
+    }
+
     public function isConfigured(): bool
     {
         $path = config('google-workspace.service_account_json_path');
@@ -20,10 +27,19 @@ class GoogleWorkspaceDirectoryService
             && is_readable($this->resolvePath((string) $path));
     }
 
+    public function supports(Student $student): bool
+    {
+        return true;
+    }
+
     public function resetPassword(Student $student, string $password, bool $changePasswordAtNextLogin): void
     {
         if (! $this->isConfigured()) {
-            throw new GoogleWorkspaceException('Google Workspace Directory API is not configured.');
+            throw new GoogleWorkspaceException(
+                'Google Workspace Directory API is not configured.',
+                'configuration_error',
+                DirectoryRetryMode::None,
+            );
         }
 
         try {
@@ -34,12 +50,52 @@ class GoogleWorkspaceDirectoryService
             $user->setChangePasswordAtNextLogin($changePasswordAtNextLogin);
 
             $directory->users->update($student->email, $user);
+        } catch (GoogleWorkspaceException $exception) {
+            throw $exception;
         } catch (\Throwable $exception) {
             throw new GoogleWorkspaceException(
-                'Google password reset failed: '.$exception->getMessage(),
-                previous: $exception,
+                'Google password reset failed.',
+                $this->classifyGoogleReason($exception),
+                $this->classifyGoogleRetryMode($exception),
+                $exception,
             );
         }
+    }
+
+    private function classifyGoogleReason(\Throwable $exception): string
+    {
+        $message = strtolower($exception->getMessage());
+
+        if (str_contains($message, 'rate') || str_contains($message, 'quota') || str_contains($message, '429')) {
+            return 'rate_limited';
+        }
+
+        if (str_contains($message, 'timeout') || str_contains($message, 'timed out')) {
+            return 'timeout';
+        }
+
+        if (str_contains($message, 'connection') || str_contains($message, 'network') || str_contains($message, 'unreachable')) {
+            return 'connection_failed';
+        }
+
+        if (str_contains($message, 'permission') || str_contains($message, 'forbidden') || str_contains($message, '403')) {
+            return 'permission_denied';
+        }
+
+        if (str_contains($message, 'not found') || str_contains($message, '404')) {
+            return 'not_found';
+        }
+
+        return 'unexpected_error';
+    }
+
+    private function classifyGoogleRetryMode(\Throwable $exception): DirectoryRetryMode
+    {
+        return match ($this->classifyGoogleReason($exception)) {
+            'rate_limited', 'timeout', 'connection_failed' => DirectoryRetryMode::Automatic,
+            'permission_denied' => DirectoryRetryMode::Manual,
+            default => DirectoryRetryMode::None,
+        };
     }
 
     private function createDirectoryService(): Directory

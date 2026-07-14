@@ -326,6 +326,12 @@ class KioskResetController extends Controller
             abort(403);
         }
 
+        if ($resetRequest->password_mode === \App\Enums\ResetPasswordMode::StudentSelectedPendingApproval->value
+            || $resetRequest->pending_password_type === \App\Enums\PendingPasswordType::StudentSelected->value
+        ) {
+            abort(403);
+        }
+
         $this->authorizeResetRequestAccess($request, $resetRequest);
 
         $resetRequest->refresh();
@@ -340,6 +346,7 @@ class KioskResetController extends Controller
 
         $resetRequest->forceFill([
             'pending_password_printed_at' => now(),
+            'force_change_at_next_login' => true,
         ])->save();
 
         $this->auditLog->logStudent(

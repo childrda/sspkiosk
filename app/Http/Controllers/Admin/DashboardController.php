@@ -34,6 +34,8 @@ class DashboardController extends Controller
             'resetDisabledStudents' => Student::query()->where('reset_enabled', false)->count(),
             'kiosks' => $kioskModels,
             'onlineKiosks' => $kioskModels->filter(fn (Kiosk $kiosk): bool => $this->kiosks->isOnline($kiosk))->count(),
+            'adEnabled' => (bool) config('active-directory.enabled'),
+            'adConfigured' => app(\App\Services\ActiveDirectoryService::class)->isConfigured(),
             'recentPending' => PasswordResetRequest::query()
                 ->with(['student', 'kiosk'])
                 ->where('status', PasswordResetRequestStatus::Pending)

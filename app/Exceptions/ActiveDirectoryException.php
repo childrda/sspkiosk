@@ -4,11 +4,11 @@ namespace App\Exceptions;
 
 use App\Enums\DirectoryRetryMode;
 
-class GoogleWorkspaceException extends DirectoryResetException
+class ActiveDirectoryException extends DirectoryResetException
 {
     public function __construct(
         string $message,
-        string $reason = 'unexpected_error',
+        string $reason,
         DirectoryRetryMode $retryMode = DirectoryRetryMode::None,
         ?\Throwable $previous = null,
     ) {

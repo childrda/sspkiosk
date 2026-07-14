@@ -4,7 +4,7 @@ namespace Tests\Feature;
 
 use App\Enums\PasswordResetRequestStatus;
 use App\Enums\PendingPasswordType;
-use App\Jobs\ResetGooglePasswordJob;
+use App\Jobs\ResetDirectoryPasswordsJob;
 use App\Models\PasswordResetRequest;
 use App\Models\Student;
 use App\Services\PendingPasswordService;
@@ -133,7 +133,7 @@ class SlackInteractionTest extends TestCase
         $resetRequest->refresh();
         $this->assertSame(PasswordResetRequestStatus::ApprovedProcessing, $resetRequest->status);
         $this->assertSame('U_TECH', $resetRequest->approved_by_slack_user_id);
-        Queue::assertPushed(ResetGooglePasswordJob::class);
+        Queue::assertPushed(ResetDirectoryPasswordsJob::class);
     }
 
     public function test_cannot_approve_twice(): void

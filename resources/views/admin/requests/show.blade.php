@@ -35,6 +35,13 @@
         <p><strong>Requested:</strong> {{ $resetRequest->requested_at?->toDateTimeString() }}</p>
         <p><strong>Expires:</strong> {{ $resetRequest->expires_at?->toDateTimeString() }}</p>
         <p><strong>Reset mode:</strong> {{ $resetRequest->reset_mode ?? '—' }}</p>
+        <p><strong>Password mode:</strong> {{ $resetRequest->password_mode ?? '—' }}</p>
+        <p><strong>Password origin:</strong> {{ $resetRequest->password_origin ?? '—' }}</p>
+        <p><strong>Force change at next login:</strong> {{ $resetRequest->force_change_at_next_login === null ? '—' : ($resetRequest->force_change_at_next_login ? 'Yes' : 'No') }}</p>
+        @if ($resetRequest->superseded_student_selected_password)
+            <p><strong>Student-selected password superseded:</strong> Yes (office-generated temporary replacement)</p>
+        @endif
+        <p><strong>Retry available:</strong> {{ $resetRequest->retry_available ? 'Yes' : 'No' }}</p>
         @if ($resetRequest->escalated_at)
             <p><strong>Escalated in Slack:</strong> {{ $resetRequest->escalated_at->toDateTimeString() }}
                 @if ($resetRequest->escalated_by_slack_user_id)
@@ -71,11 +78,32 @@
             </p>
         @endif
         @if ($resetRequest->google_reset_attempted_at)
-            <p><strong>Google reset:</strong> {{ $resetRequest->google_reset_success ? 'Success' : 'Failed' }}
+            <p><strong>Google reset (legacy):</strong> {{ $resetRequest->google_reset_success ? 'Success' : 'Failed' }}
                 @if ($resetRequest->google_error_message)
                     — {{ $resetRequest->google_error_message }}
                 @endif
             </p>
+        @endif
+        @if (is_array($resetRequest->directory_results))
+            <h2 style="margin-top:1.25rem;font-size:1.1rem;">Directory results</h2>
+            <p class="muted">Required: {{ implode(', ', $resetRequest->directory_results['required_directories'] ?? []) ?: '—' }}</p>
+            <ul>
+                @foreach (($resetRequest->directory_results['results'] ?? []) as $directory => $result)
+                    <li>
+                        <strong>{{ str_replace('_', ' ', $directory) }}:</strong>
+                        {{ $result['status'] ?? '—' }}
+                        @if (! empty($result['reason']))
+                            ({{ $result['reason'] }})
+                        @endif
+                        @if (! empty($result['retry_mode']) && ($result['status'] ?? null) === 'failed')
+                            — retry: {{ $result['retry_mode'] }}
+                        @endif
+                        @if (! empty($result['attempts']))
+                            — attempts: {{ $result['attempts'] }}
+                        @endif
+                    </li>
+                @endforeach
+            </ul>
         @endif
     </div>
 
@@ -83,6 +111,11 @@
         <div class="card">
             <h2>Office verification</h2>
             <p>Compare the registration photo and kiosk photo side by side before verifying identity.</p>
+            <p class="muted" style="color:#9a3412;">
+                This action will replace the password selected by the student with a new temporary password.
+                The student will be required to change it at the next login in both Google Workspace and Windows.
+                Student-selected passwords are never shown to staff.
+            </p>
 
             <form method="post" action="{{ route('admin.requests.office-verify', $resetRequest) }}" style="margin-bottom:1.5rem;" onsubmit="return confirm('Verify this student and reset their password? This cannot be undone.');">
                 @csrf
@@ -106,12 +139,25 @@
 
     @if ($resetRequest->status === PasswordResetRequestStatus::Failed)
         <div class="card">
-            <h2>Retry Google reset</h2>
-            <p>The Google password reset failed. Retry mints a new password and re-queues the job.</p>
-            <form method="post" action="{{ route('admin.requests.retry-reset', $resetRequest) }}" onsubmit="return confirm('Retry the Google password reset with a new password?');">
+            <h2>Retry directory reset</h2>
+            <p>Retry mints a new office-generated temporary password and writes it to Google Workspace and Active Directory.</p>
+            <form method="post" action="{{ route('admin.requests.retry-reset', $resetRequest) }}" onsubmit="return confirm('Retry the directory password reset with a new password?');">
                 @csrf
                 <button type="submit" class="btn btn-primary">Retry reset</button>
             </form>
+        </div>
+    @endif
+
+    @if ($resetRequest->status === PasswordResetRequestStatus::PartiallyCompleted)
+        <div class="card">
+            <h2>Partial completion</h2>
+            <p>
+                At least one directory succeeded and at least one did not. Student-selected passwords are retained for
+                recovery (Prompt 2). Active Directory policy rejection means the student must choose a different password.
+            </p>
+            @if ($resetRequest->retry_available)
+                <p class="muted">A manual or automatic retry remains available for the current encrypted password.</p>
+            @endif
         </div>
     @endif
 

@@ -4,7 +4,8 @@ namespace Tests\Feature;
 
 use App\Enums\PasswordResetRequestStatus;
 use App\Enums\PendingPasswordType;
-use App\Jobs\ResetGooglePasswordJob;
+use App\Jobs\ResetDirectoryPasswordsJob;
+use Tests\Support\RunsDirectoryPasswordJobs;
 use App\Models\PasswordResetRequest;
 use App\Models\Student;
 use App\Models\User;
@@ -22,6 +23,7 @@ use Tests\TestCase;
 class OfficeVerificationTest extends TestCase
 {
     use RefreshDatabase;
+    use RunsDirectoryPasswordJobs;
 
     protected function tearDown(): void
     {
@@ -154,7 +156,7 @@ class OfficeVerificationTest extends TestCase
         $this->assertSame($admin->id, $request->office_verified_by_user_id);
         $this->assertNull($request->google_reset_attempted_at);
 
-        Queue::assertPushed(ResetGooglePasswordJob::class, fn (ResetGooglePasswordJob $job): bool => $job->passwordResetRequestId === $request->id);
+        Queue::assertPushed(ResetDirectoryPasswordsJob::class, fn (ResetDirectoryPasswordsJob $job): bool => $job->passwordResetRequestId === $request->id);
     }
 
     public function test_verify_forces_change_password_at_next_login_even_when_config_disabled(): void
@@ -176,7 +178,7 @@ class OfficeVerificationTest extends TestCase
 
         $request->refresh();
 
-        $directory = Mockery::mock(GoogleWorkspaceDirectoryService::class);
+        $directory = Mockery::mock(\App\Contracts\DirectoryPasswordResetter::class);
         $directory->shouldReceive('resetPassword')
             ->once()
             ->with(
@@ -189,12 +191,7 @@ class OfficeVerificationTest extends TestCase
                 }),
             );
 
-        (new ResetGooglePasswordJob($request->id))->handle(
-            $directory,
-            app(PendingPasswordService::class),
-            app(\App\Services\AuditLogService::class),
-            app(SlackApprovalService::class),
-        );
+        $this->runDirectoryPasswordJob($request->id, $directory);
 
         $this->assertTrue($forceChange);
     }
@@ -309,7 +306,7 @@ class OfficeVerificationTest extends TestCase
         $this->assertNull($request->google_reset_attempted_at);
         $this->assertTrue($request->hasEncryptedPendingPassword());
 
-        Queue::assertPushed(ResetGooglePasswordJob::class);
+        Queue::assertPushed(ResetDirectoryPasswordsJob::class);
     }
 
     public function test_retry_on_non_failed_status_is_blocked(): void
@@ -335,7 +332,7 @@ class OfficeVerificationTest extends TestCase
         $this->actingAs($admin)->post(route('admin.requests.office-verify', $request));
         $this->actingAs($admin)->post(route('admin.requests.office-verify', $request->fresh()));
 
-        Queue::assertPushed(ResetGooglePasswordJob::class, 1);
+        Queue::assertPushed(ResetDirectoryPasswordsJob::class, 1);
     }
 
     public function test_expire_requests_command_expires_stale_office_verification(): void
@@ -391,15 +388,10 @@ class OfficeVerificationTest extends TestCase
 
         $request->refresh();
 
-        $directory = Mockery::mock(GoogleWorkspaceDirectoryService::class);
+        $directory = Mockery::mock(\App\Contracts\DirectoryPasswordResetter::class);
         $directory->shouldReceive('resetPassword')->once();
 
-        (new ResetGooglePasswordJob($request->id))->handle(
-            $directory,
-            app(PendingPasswordService::class),
-            app(\App\Services\AuditLogService::class),
-            app(SlackApprovalService::class),
-        );
+        $this->runDirectoryPasswordJob($request->id, $directory);
 
         $this->assertSame(PasswordResetRequestStatus::Completed, $request->fresh()->status);
         $this->assertTrue($request->fresh()->google_reset_success);

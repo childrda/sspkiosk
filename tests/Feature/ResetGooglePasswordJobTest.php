@@ -4,18 +4,19 @@ namespace Tests\Feature;
 
 use App\Enums\PasswordResetRequestStatus;
 use App\Enums\PendingPasswordType;
-use App\Jobs\ResetGooglePasswordJob;
+use App\Jobs\ResetDirectoryPasswordsJob;
 use App\Models\PasswordResetRequest;
 use App\Models\Student;
-use App\Services\GoogleWorkspaceDirectoryService;
 use App\Services\PendingPasswordService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Mockery;
+use Tests\Support\RunsDirectoryPasswordJobs;
 use Tests\TestCase;
 
 class ResetGooglePasswordJobTest extends TestCase
 {
     use RefreshDatabase;
+    use RunsDirectoryPasswordJobs;
 
     protected function tearDown(): void
     {
@@ -34,15 +35,7 @@ class ResetGooglePasswordJobTest extends TestCase
 
         app(PendingPasswordService::class)->store($request, 'Mint-River-4321-Sky', PendingPasswordType::TemporaryGenerated);
 
-        $directory = Mockery::mock(GoogleWorkspaceDirectoryService::class);
-        $directory->shouldReceive('resetPassword')->once();
-
-        (new ResetGooglePasswordJob($request->id))->handle(
-            $directory,
-            app(PendingPasswordService::class),
-            app(\App\Services\AuditLogService::class),
-            app(\App\Services\SlackApprovalService::class),
-        );
+        $this->runDirectoryPasswordJob($request->id);
 
         $request->refresh();
         $this->assertSame(PasswordResetRequestStatus::Completed, $request->status);
@@ -55,15 +48,10 @@ class ResetGooglePasswordJobTest extends TestCase
             'status' => PasswordResetRequestStatus::Pending,
         ]);
 
-        $directory = Mockery::mock(GoogleWorkspaceDirectoryService::class);
-        $directory->shouldNotReceive('resetPassword');
+        $google = Mockery::mock(\App\Contracts\DirectoryPasswordResetter::class);
+        $google->shouldNotReceive('resetPassword');
 
-        (new ResetGooglePasswordJob($request->id))->handle(
-            $directory,
-            app(PendingPasswordService::class),
-            app(\App\Services\AuditLogService::class),
-            app(\App\Services\SlackApprovalService::class),
-        );
+        $this->runDirectoryPasswordJob($request->id, $google);
 
         $this->assertNull($request->fresh()->google_reset_attempted_at);
     }
@@ -71,21 +59,37 @@ class ResetGooglePasswordJobTest extends TestCase
     public function test_job_is_idempotent(): void
     {
         $request = PasswordResetRequest::factory()->create([
-            'status' => PasswordResetRequestStatus::ApprovedProcessing,
+            'status' => PasswordResetRequestStatus::Completed,
             'google_reset_attempted_at' => now(),
             'google_reset_success' => true,
+            'directory_results' => [
+                'planned_directories' => ['google'],
+                'required_directories' => ['google'],
+                'results' => [
+                    'google' => [
+                        'status' => 'success',
+                        'reason' => null,
+                        'retry_mode' => 'none',
+                        'attempts' => 1,
+                        'last_attempt_at' => now()->toIso8601String(),
+                        'processing_started_at' => null,
+                        'completed_at' => now()->toIso8601String(),
+                    ],
+                ],
+            ],
         ]);
 
-        $directory = Mockery::mock(GoogleWorkspaceDirectoryService::class);
-        $directory->shouldNotReceive('resetPassword');
+        $google = Mockery::mock(\App\Contracts\DirectoryPasswordResetter::class);
+        $google->shouldNotReceive('resetPassword');
 
-        (new ResetGooglePasswordJob($request->id))->handle(
-            $directory,
-            app(PendingPasswordService::class),
-            app(\App\Services\AuditLogService::class),
-            app(\App\Services\SlackApprovalService::class),
-        );
+        $this->runDirectoryPasswordJob($request->id, $google);
 
         $this->assertTrue($request->fresh()->google_reset_success);
+        $this->assertSame(PasswordResetRequestStatus::Completed, $request->fresh()->status);
+    }
+
+    public function test_new_job_class_exists(): void
+    {
+        $this->assertTrue(class_exists(ResetDirectoryPasswordsJob::class));
     }
 }

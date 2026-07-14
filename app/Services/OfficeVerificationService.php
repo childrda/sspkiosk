@@ -2,9 +2,10 @@
 
 namespace App\Services;
 
+use App\Enums\PasswordOrigin;
 use App\Enums\PasswordResetRequestStatus;
 use App\Enums\PendingPasswordType;
-use App\Jobs\ResetGooglePasswordJob;
+use App\Jobs\ResetDirectoryPasswordsJob;
 use App\Models\PasswordResetRequest;
 use App\Models\User;
 use Illuminate\Support\Facades\DB;
@@ -36,17 +37,24 @@ class OfficeVerificationService
             $this->assertOfficeVerificationNotExpired($locked);
 
             $plain = $this->passwords->generate();
+            $superseded = $locked->password_origin === PasswordOrigin::StudentSelected->value
+                || $locked->pending_password_type === PendingPasswordType::StudentSelected->value;
 
-            $this->pendingPasswords->store($locked, $plain, PendingPasswordType::TemporaryGenerated);
+            $this->pendingPasswords->store(
+                $locked,
+                $plain,
+                PendingPasswordType::TemporaryGenerated,
+                PasswordOrigin::OfficeGeneratedTemporary,
+                true,
+                $superseded,
+                $locked->reset_mode,
+            );
 
             $locked->forceFill([
                 'office_verified_at' => now(),
                 'office_verified_by_user_id' => $admin->id,
                 'office_verification_notes' => $notes !== null && trim($notes) !== '' ? trim($notes) : null,
                 'status' => PasswordResetRequestStatus::ApprovedProcessing,
-                'google_reset_attempted_at' => null,
-                'google_reset_success' => null,
-                'google_error_message' => null,
             ])->save();
 
             $this->auditLog->logAdmin(
@@ -57,10 +65,10 @@ class OfficeVerificationService
                 ['notes_supplied' => $notes !== null && trim($notes) !== ''],
             );
 
-            ResetGooglePasswordJob::dispatch($locked->id);
+            ResetDirectoryPasswordsJob::dispatch($locked->id);
 
             $locked->refresh();
-            $this->slackApproval->notifyOfficeOutcome($locked, 'Verified in office — Google reset queued', $admin);
+            $this->slackApproval->notifyOfficeOutcome($locked, 'Verified in office — directory reset queued', $admin);
 
             return $plain;
         });
@@ -85,6 +93,8 @@ class OfficeVerificationService
                 'denial_reason' => trim($reason),
                 'denied_by_slack_user_id' => null,
             ])->save();
+
+            $this->pendingPasswords->delete($locked, 'denial');
 
             $this->auditLog->logAdmin(
                 'admin.request.office_rejected',
@@ -118,13 +128,18 @@ class OfficeVerificationService
 
             $plain = $this->passwords->generate();
 
-            $this->pendingPasswords->store($locked, $plain, PendingPasswordType::TemporaryGenerated);
+            $this->pendingPasswords->store(
+                $locked,
+                $plain,
+                PendingPasswordType::TemporaryGenerated,
+                PasswordOrigin::OfficeGeneratedTemporary,
+                true,
+                false,
+                $locked->reset_mode,
+            );
 
             $locked->forceFill([
                 'status' => PasswordResetRequestStatus::ApprovedProcessing,
-                'google_reset_attempted_at' => null,
-                'google_reset_success' => null,
-                'google_error_message' => null,
             ])->save();
 
             $this->auditLog->logAdmin(
@@ -134,7 +149,7 @@ class OfficeVerificationService
                 (string) $locked->id,
             );
 
-            ResetGooglePasswordJob::dispatch($locked->id);
+            ResetDirectoryPasswordsJob::dispatch($locked->id);
 
             return $plain;
         });

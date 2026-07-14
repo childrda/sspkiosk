@@ -11,6 +11,7 @@ enum PasswordResetRequestStatus: string
     case NeedsOfficeVerification = 'needs_office_verification';
     case Expired = 'expired';
     case Failed = 'failed';
+    case PartiallyCompleted = 'partially_completed';
 
     /** @deprecated Use completed or approved_processing */
     case Approved = 'approved';

@@ -23,26 +23,32 @@ class ConfigCheckCommand extends Command
                 'google_password_reset' => $validator->missingRequiredForGooglePasswordReset(),
                 'slack' => $validator->missingRequiredForSlack(),
                 'kiosk_reset' => $validator->missingRequiredForKioskReset(),
+                'active_directory' => $validator->missingRequiredForActiveDirectory(),
                 default => null,
             };
 
             if ($missing === null) {
-                $this->error('Unknown workflow. Use: google_auth, google_directory_lookup, google_password_reset, slack, kiosk_reset');
+                $this->error('Unknown workflow. Use: google_auth, google_directory_lookup, google_password_reset, slack, kiosk_reset, active_directory');
 
                 return self::FAILURE;
             }
 
-            return $this->renderMissing($missing);
+            return $this->renderMissing($missing, $validator->warnings());
         }
 
-        return $this->renderMissing($validator->allMissing());
+        return $this->renderMissing($validator->allMissing(), $validator->warnings());
     }
 
     /**
      * @param  array<string, list<string>>  $missing
+     * @param  list<string>  $warnings
      */
-    private function renderMissing(array $missing): int
+    private function renderMissing(array $missing, array $warnings = []): int
     {
+        foreach ($warnings as $warning) {
+            $this->warn($warning);
+        }
+
         if ($missing === []) {
             $this->info('All checked configuration values are present.');
 

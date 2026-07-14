@@ -5,7 +5,7 @@ namespace App\Services;
 use App\Enums\PasswordResetRequestStatus;
 use App\Enums\PendingPasswordType;
 use App\Enums\StudentPhotoType;
-use App\Jobs\ResetGooglePasswordJob;
+use App\Jobs\ResetDirectoryPasswordsJob;
 use App\Models\PasswordResetRequest;
 use App\Models\StudentPhoto;
 use App\Services\Slack\SlackApiClient;
@@ -215,11 +215,11 @@ class SlackApprovalService
 
         $this->auditLog->logTech('slack.reset.approved', $slackUserId, 'password_reset_request', (string) $request->id);
         $this->refreshSlackMessage($request, 'Approved — processing', $slackUserId);
-        ResetGooglePasswordJob::dispatch($request->id);
+        ResetDirectoryPasswordsJob::dispatch($request->id);
 
         return [
             'response_type' => 'ephemeral',
-            'text' => 'Reset approved. Google password reset will run shortly.',
+            'text' => 'Reset approved. Directory password reset will run shortly.',
         ];
     }
 
@@ -307,22 +307,53 @@ class SlackApprovalService
 
     public function appendGoogleResetStatus(PasswordResetRequest $request, bool $success): void
     {
+        $this->appendDirectoryResetStatus($request);
+    }
+
+    public function appendDirectoryResetStatus(PasswordResetRequest $request): void
+    {
         if ($request->slack_channel_id === null || $request->slack_message_ts === null) {
             return;
         }
 
         $request->load(['student', 'kiosk']);
+        $request->refresh();
 
-        $googleStatus = $success
-            ? 'Google password reset completed. The pending password was applied and removed from the application.'
-            : 'Google password reset failed. Check application logs.';
+        $results = $request->directory_results['results'] ?? [];
+        $google = $results['google']['status'] ?? 'pending';
+        $ad = $results['active_directory']['status'] ?? 'pending';
+        $adReason = $results['active_directory']['reason'] ?? null;
+
+        $statusLabel = match ($request->status) {
+            \App\Enums\PasswordResetRequestStatus::Completed => 'Completed — directories updated',
+            \App\Enums\PasswordResetRequestStatus::PartiallyCompleted => 'Partially completed — action needed',
+            \App\Enums\PasswordResetRequestStatus::Failed => 'Failed — directory reset error',
+            default => 'Processing — directory reset in progress',
+        };
+
+        $adLine = match ($ad) {
+            'success' => 'Active Directory password reset completed.',
+            'failed' => $adReason === 'policy_rejected'
+                ? 'Active Directory rejected the selected password. The student may need to choose a different password (Prompt 2 recovery).'
+                : 'Active Directory password reset failed ('.$adReason.').',
+            'skipped' => 'Active Directory skipped ('.$adReason.').',
+            default => 'Active Directory pending.',
+        };
+
+        $googleLine = match ($google) {
+            'success' => 'Google Workspace password reset completed.',
+            'failed' => 'Google Workspace password reset failed.',
+            'skipped' => 'Google Workspace skipped.',
+            default => 'Google Workspace pending.',
+        };
 
         $blocks = $this->buildMessageBlocks(
             request: $request,
-            statusLabel: $success ? 'Completed — Google reset successful' : 'Failed — Google reset error',
+            statusLabel: $statusLabel,
             includeActions: false,
             extraFields: [
-                '*Google reset*' => $googleStatus,
+                '*Google*' => $googleLine,
+                '*Active Directory*' => $adLine,
                 '*Student*' => "{$request->student->name} ({$request->student->email})",
                 '*Approved by*' => $request->approved_by_slack_user_id
                     ? "<@{$request->approved_by_slack_user_id}>"
@@ -333,7 +364,7 @@ class SlackApprovalService
         $this->slackApi->updateMessage([
             'channel' => $request->slack_channel_id,
             'ts' => $request->slack_message_ts,
-            'text' => "Password reset request #{$request->id} — Google reset ".($success ? 'complete' : 'failed'),
+            'text' => "Password reset request #{$request->id} — {$statusLabel}",
             'blocks' => $blocks,
         ]);
     }

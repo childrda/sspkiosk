@@ -4,25 +4,26 @@ namespace Tests\Feature;
 
 use App\Enums\PasswordResetRequestStatus;
 use App\Enums\PendingPasswordType;
-use App\Jobs\ResetGooglePasswordJob;
+use App\Jobs\ResetDirectoryPasswordsJob;
 use App\Models\AuditLog;
 use App\Models\Kiosk;
 use App\Models\PasswordResetRequest;
 use App\Models\Student;
-use App\Services\GoogleWorkspaceDirectoryService;
-use App\Services\KioskCredentialService;
 use App\Services\PasswordGeneratorService;
 use App\Services\PendingPasswordService;
 use App\Services\SlackApprovalService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\Queue;
+use Mockery;
+use Tests\Support\RunsDirectoryPasswordJobs;
 use Tests\Support\SignsKioskRequests;
 use Tests\TestCase;
 
 class PendingPasswordFlowTest extends TestCase
 {
     use RefreshDatabase;
+    use RunsDirectoryPasswordJobs;
     use SignsKioskRequests;
 
     protected function setUp(): void
@@ -110,19 +111,14 @@ class PendingPasswordFlowTest extends TestCase
 
         app(PendingPasswordService::class)->store($request, 'Mint-River-4321-Sky', PendingPasswordType::TemporaryGenerated);
 
-        $directory = $this->mock(GoogleWorkspaceDirectoryService::class);
+        $directory = Mockery::mock(\App\Contracts\DirectoryPasswordResetter::class);
         $directory->shouldReceive('resetPassword')
             ->once()
             ->withArgs(function ($student, $password, $forceChange) {
                 return $password === 'Mint-River-4321-Sky' && $forceChange === true;
             });
 
-        (new ResetGooglePasswordJob($request->id))->handle(
-            $directory,
-            app(PendingPasswordService::class),
-            app(\App\Services\AuditLogService::class),
-            app(SlackApprovalService::class),
-        );
+        $this->runDirectoryPasswordJob($request->id, $directory);
 
         $request->refresh();
         $this->assertSame(PasswordResetRequestStatus::Completed, $request->status);
@@ -227,7 +223,7 @@ class PendingPasswordFlowTest extends TestCase
 
     public function test_job_constructor_only_stores_request_id(): void
     {
-        $job = new ResetGooglePasswordJob(42);
+        $job = new ResetDirectoryPasswordsJob(42);
         $serialized = serialize($job);
 
         $this->assertStringNotContainsString('Mint-River', $serialized);
@@ -255,16 +251,11 @@ class PendingPasswordFlowTest extends TestCase
 
         app(PendingPasswordService::class)->store($request, 'ValidPass-1234', PendingPasswordType::StudentSelected);
 
-        $directory = $this->mock(GoogleWorkspaceDirectoryService::class);
+        $directory = Mockery::mock(\App\Contracts\DirectoryPasswordResetter::class);
         $directory->shouldReceive('resetPassword')
             ->once()
             ->withArgs(fn ($student, $password, $forceChange) => $forceChange === false);
 
-        (new ResetGooglePasswordJob($request->id))->handle(
-            $directory,
-            app(PendingPasswordService::class),
-            app(\App\Services\AuditLogService::class),
-            app(SlackApprovalService::class),
-        );
+        $this->runDirectoryPasswordJob($request->id, $directory);
     }
 }

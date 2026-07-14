@@ -39,6 +39,10 @@
             <span class="muted">Queued jobs</span>
         </div>
         <div class="stat">
+            <strong>{{ $adEnabled ? ($adConfigured ? 'OK' : 'Misconfigured') : 'Off' }}</strong>
+            <span class="muted">Active Directory {{ $adEnabled ? '(LDAPS)' : '(AD_ENABLED=false)' }}</span>
+        </div>
+        <div class="stat">
             <strong>{{ $failedJobCount }}</strong>
             <span class="muted">Failed jobs</span>
         </div>

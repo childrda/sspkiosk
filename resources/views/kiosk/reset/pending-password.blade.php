@@ -13,7 +13,10 @@
 
     <p class="temp-password no-print" id="temp-password" aria-live="polite">{{ $temporaryPassword }}</p>
 
-    @if ($labelPrintingEnabled && $resetRequest->pending_password_printed_at === null)
+    @if ($labelPrintingEnabled
+        && $resetRequest->pending_password_printed_at === null
+        && $resetRequest->password_mode !== \App\Enums\ResetPasswordMode::StudentSelectedPendingApproval->value
+        && $resetRequest->pending_password_type !== \App\Enums\PendingPasswordType::StudentSelected->value)
         <p class="no-print" style="margin-top:1rem;">
             <button type="button" class="btn btn-secondary" id="print-label-btn">Print label</button>
         </p>
