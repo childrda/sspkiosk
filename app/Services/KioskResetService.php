@@ -70,7 +70,7 @@ class KioskResetService
             $score,
             $required,
             $request,
-        ): PasswordResetRequest {
+        ): ?PasswordResetRequest {
             if ($score < $required) {
                 $failed = $this->createRequest(
                     $student,

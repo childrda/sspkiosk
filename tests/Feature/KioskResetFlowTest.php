@@ -178,4 +178,103 @@ class KioskResetFlowTest extends TestCase
         $this->assertSame(PasswordResetRequestStatus::Failed, PasswordResetRequest::query()->first()->status);
         Queue::assertNothingPushed();
     }
+
+    public function test_student_selected_passing_challenge_redirects_to_password_without_creating_request(): void
+    {
+        Queue::fake();
+        Storage::fake('local');
+        config(['student-password-reset.reset_password_mode' => 'student_selected_pending_approval']);
+
+        [, $secret, $session] = $this->enrolledKioskWithSession();
+        $kiosk = \App\Models\Kiosk::query()->first();
+        $student = $this->registeredStudentWithQuestions();
+
+        $lookupHeaders = $this->kioskAuthHeaders($kiosk, $secret, 'POST', '/kiosk/reset/lookup');
+        $this->kioskRequest()->withSession($session)
+            ->withHeaders($lookupHeaders)
+            ->post(route('kiosk.reset.lookup'), ['identifier' => $student->email])
+            ->assertRedirect(route('kiosk.reset.confirm'));
+
+        $session = array_merge($session, [
+            config('kiosk.reset_session_student_key') => $student->id,
+        ]);
+
+        $photoHeaders = $this->kioskAuthHeaders($kiosk, $secret, 'POST', '/kiosk/reset/photo');
+        $this->kioskRequest()->withSession($session)
+            ->withHeaders($photoHeaders)
+            ->post(route('kiosk.reset.photo.store'), [
+                'photo' => UploadedFile::fake()->create('reset.jpg', 100, 'image/jpeg'),
+            ])
+            ->assertRedirect(route('kiosk.reset.questions'));
+
+        $presented = session(config('kiosk.reset_session_questions_key'));
+        $answers = [];
+        foreach ($presented as $question) {
+            $answers[$question['id']] = match ($question['question']) {
+                'Favorite color?' => 'Blue',
+                'First pet name?' => 'Rex',
+                default => 'Oak',
+            };
+        }
+
+        $session = array_merge($session, [
+            config('kiosk.reset_session_photo_key') => session(config('kiosk.reset_session_photo_key')),
+            config('kiosk.reset_session_questions_key') => $presented,
+        ]);
+
+        $submitHeaders = $this->kioskAuthHeaders($kiosk, $secret, 'POST', '/kiosk/reset/submit');
+        $this->kioskRequest()->withSession($session)
+            ->withHeaders($submitHeaders)
+            ->post(route('kiosk.reset.submit'), ['answers' => $answers])
+            ->assertRedirect(route('kiosk.reset.password'));
+
+        $this->assertSame(0, PasswordResetRequest::query()->count());
+        $this->assertSame(3, session(config('kiosk.reset_session_challenge_score_key')));
+        Queue::assertNothingPushed();
+    }
+
+    public function test_student_selected_failed_challenge_still_creates_failed_request(): void
+    {
+        Queue::fake();
+        Storage::fake('local');
+        config(['student-password-reset.reset_password_mode' => 'student_selected_pending_approval']);
+
+        [, $secret, $session] = $this->enrolledKioskWithSession();
+        $kiosk = \App\Models\Kiosk::query()->first();
+        $student = $this->registeredStudentWithQuestions();
+
+        $lookupHeaders = $this->kioskAuthHeaders($kiosk, $secret, 'POST', '/kiosk/reset/lookup');
+        $this->kioskRequest()->withSession($session)
+            ->withHeaders($lookupHeaders)
+            ->post(route('kiosk.reset.lookup'), ['identifier' => $student->email]);
+
+        $session[config('kiosk.reset_session_student_key')] = $student->id;
+
+        $photoHeaders = $this->kioskAuthHeaders($kiosk, $secret, 'POST', '/kiosk/reset/photo');
+        $this->kioskRequest()->withSession($session)
+            ->withHeaders($photoHeaders)
+            ->post(route('kiosk.reset.photo.store'), [
+                'photo' => UploadedFile::fake()->create('reset.jpg', 100, 'image/jpeg'),
+            ]);
+
+        $presented = session(config('kiosk.reset_session_questions_key'));
+        $answers = [];
+        foreach ($presented as $question) {
+            $answers[$question['id']] = 'wrong-answer';
+        }
+
+        $session[config('kiosk.reset_session_photo_key')] = session(config('kiosk.reset_session_photo_key'));
+        $session[config('kiosk.reset_session_questions_key')] = $presented;
+
+        $submitHeaders = $this->kioskAuthHeaders($kiosk, $secret, 'POST', '/kiosk/reset/submit');
+        $this->kioskRequest()->withSession($session)
+            ->withHeaders($submitHeaders)
+            ->post(route('kiosk.reset.submit'), ['answers' => $answers])
+            ->assertRedirect(route('kiosk.reset.index'));
+
+        $request = PasswordResetRequest::query()->first();
+        $this->assertNotNull($request);
+        $this->assertSame(PasswordResetRequestStatus::Failed, $request->status);
+        Queue::assertNothingPushed();
+    }
 }
