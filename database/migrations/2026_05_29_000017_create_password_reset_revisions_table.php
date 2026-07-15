@@ -11,7 +11,7 @@ return new class extends Migration
     {
         Schema::create('password_reset_revisions', function (Blueprint $table) {
             $table->id();
-            $table->foreignId('password_reset_request_id')->constrained('password_reset_requests')->cascadeOnDelete();
+            $table->unsignedBigInteger('password_reset_request_id');
             $table->unsignedInteger('revision_number');
             $table->string('password_mode')->nullable();
             $table->string('password_origin')->nullable();
@@ -27,12 +27,18 @@ return new class extends Migration
             $table->boolean('retry_available')->default(false);
             $table->string('status')->default('active');
             $table->timestamp('superseded_at')->nullable();
-            // MySQL-compatible "one active revision" guard (null when superseded/terminal).
+            // App-managed single-active-revision guard (NULL when superseded/terminal).
+            // Unique index allows multiple NULLs on MySQL; only one non-NULL value per request id.
             $table->unsignedBigInteger('active_for_request_id')->nullable();
             $table->timestamps();
 
-            $table->unique(['password_reset_request_id', 'revision_number']);
-            $table->unique('active_for_request_id');
+            $table->foreign('password_reset_request_id', 'prr_request_fk')
+                ->references('id')
+                ->on('password_reset_requests')
+                ->cascadeOnDelete();
+
+            $table->unique(['password_reset_request_id', 'revision_number'], 'prr_revision_number_unique');
+            $table->unique('active_for_request_id', 'prr_active_unique');
         });
 
         $requests = DB::table('password_reset_requests')->orderBy('id')->get();

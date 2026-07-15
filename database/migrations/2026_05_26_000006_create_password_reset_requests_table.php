@@ -10,12 +10,12 @@ return new class extends Migration
     {
         Schema::create('password_reset_requests', function (Blueprint $table) {
             $table->id();
-            $table->foreignId('student_id')->constrained()->cascadeOnDelete();
-            $table->foreignId('kiosk_id')->constrained()->restrictOnDelete();
+            $table->unsignedBigInteger('student_id');
+            $table->unsignedBigInteger('kiosk_id');
             $table->string('status')->default('pending');
             $table->json('challenge_questions_presented')->nullable();
             $table->unsignedTinyInteger('challenge_score')->nullable();
-            $table->foreignId('reset_photo_id')->nullable()->constrained('student_photos')->nullOnDelete();
+            $table->unsignedBigInteger('reset_photo_id')->nullable();
             $table->string('slack_channel_id')->nullable();
             $table->string('slack_message_ts')->nullable();
             $table->dateTime('requested_at');
@@ -30,8 +30,21 @@ return new class extends Migration
             $table->text('google_error_message')->nullable();
             $table->timestamps();
 
-            $table->index(['status', 'requested_at']);
-            $table->index(['student_id', 'status']);
+            $table->foreign('student_id', 'prq_student_fk')
+                ->references('id')
+                ->on('students')
+                ->cascadeOnDelete();
+            $table->foreign('kiosk_id', 'prq_kiosk_fk')
+                ->references('id')
+                ->on('kiosks')
+                ->restrictOnDelete();
+            $table->foreign('reset_photo_id', 'prq_reset_photo_fk')
+                ->references('id')
+                ->on('student_photos')
+                ->nullOnDelete();
+
+            $table->index(['status', 'requested_at'], 'prq_status_requested_idx');
+            $table->index(['student_id', 'status'], 'prq_student_status_idx');
         });
     }
 

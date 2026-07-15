@@ -13,10 +13,14 @@ return new class extends Migration
             $table->timestamp('escalated_at')->nullable()->after('denial_reason');
             $table->string('escalated_by_slack_user_id')->nullable()->after('escalated_at');
             $table->timestamp('office_verified_at')->nullable()->after('escalated_by_slack_user_id');
-            $table->foreignId('office_verified_by_user_id')->nullable()->after('office_verified_at')
-                ->constrained('users')->nullOnDelete();
+            $table->unsignedBigInteger('office_verified_by_user_id')->nullable()->after('office_verified_at');
             $table->text('office_verification_notes')->nullable()->after('office_verified_by_user_id');
             $table->timestamp('office_verification_expires_at')->nullable()->after('office_verification_notes');
+
+            $table->foreign('office_verified_by_user_id', 'prq_office_verifier_fk')
+                ->references('id')
+                ->on('users')
+                ->nullOnDelete();
         });
 
         $expiresHours = 48;
@@ -45,11 +49,12 @@ return new class extends Migration
     public function down(): void
     {
         Schema::table('password_reset_requests', function (Blueprint $table) {
-            $table->dropConstrainedForeignId('office_verified_by_user_id');
+            $table->dropForeign('prq_office_verifier_fk');
             $table->dropColumn([
                 'escalated_at',
                 'escalated_by_slack_user_id',
                 'office_verified_at',
+                'office_verified_by_user_id',
                 'office_verification_notes',
                 'office_verification_expires_at',
             ]);

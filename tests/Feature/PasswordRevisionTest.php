@@ -392,15 +392,90 @@ class PasswordRevisionTest extends TestCase
             PendingPasswordType::TemporaryGenerated,
         );
 
-        $this->expectException(QueryException::class);
+        try {
+            PasswordResetRevision::query()->create([
+                'password_reset_request_id' => $request->id,
+                'revision_number' => 2,
+                'status' => PasswordResetRevisionStatus::Active,
+                'active_for_request_id' => $request->id,
+                'retry_available' => false,
+            ]);
+            $this->fail('Expected unique constraint violation for second active revision');
+        } catch (QueryException|\Illuminate\Database\UniqueConstraintViolationException $exception) {
+            $this->assertTrue(true);
+        }
 
+        $this->assertSame(1, PasswordResetRevision::query()
+            ->where('password_reset_request_id', $request->id)
+            ->whereNotNull('active_for_request_id')
+            ->count());
+    }
+
+    public function test_unique_active_violation_through_service_returns_clean_conflict(): void
+    {
+        $request = $this->approvedRequest();
+        app(PendingPasswordService::class)->store(
+            $request,
+            'Only-One-Active-9999',
+            PendingPasswordType::TemporaryGenerated,
+        );
+
+        $service = app(PasswordRevisionService::class);
+        $method = new \ReflectionMethod($service, 'createActiveRevision');
+        $method->setAccessible(true);
+
+        try {
+            $method->invoke($service, [
+                'password_reset_request_id' => $request->id,
+                'revision_number' => 2,
+                'status' => PasswordResetRevisionStatus::Active,
+                'active_for_request_id' => $request->id,
+                'retry_available' => false,
+            ]);
+            $this->fail('Expected ConflictHttpException');
+        } catch (ConflictHttpException $exception) {
+            $this->assertSame(
+                'This request was already updated by someone else. Refresh and try again.',
+                $exception->getMessage(),
+            );
+            $this->assertInstanceOf(
+                \Illuminate\Database\UniqueConstraintViolationException::class,
+                $exception->getPrevious(),
+            );
+        }
+    }
+
+    public function test_office_revision_create_unique_race_returns_clean_conflict(): void
+    {
+        $request = $this->partiallyCompletedPolicyRejected();
+        $service = app(PasswordRevisionService::class);
+
+        $service->supersedeRevision($request->activeRevision);
+
+        // Another concurrent writer already claimed the single-active unique slot.
         PasswordResetRevision::query()->create([
             'password_reset_request_id' => $request->id,
             'revision_number' => 2,
-            'status' => PasswordResetRevisionStatus::Active,
+            'status' => PasswordResetRevisionStatus::Failed,
+            'superseded_at' => now(),
             'active_for_request_id' => $request->id,
             'retry_available' => false,
         ]);
+
+        try {
+            $service->createOfficeGeneratedRevision($request->fresh(), 'Office-Race-1234-Word', true);
+            $this->fail('Expected ConflictHttpException from prr_active_unique');
+        } catch (ConflictHttpException $exception) {
+            $this->assertSame(
+                'This request was already updated by someone else. Refresh and try again.',
+                $exception->getMessage(),
+            );
+        }
+
+        $this->assertSame(1, PasswordResetRevision::query()
+            ->where('password_reset_request_id', $request->id)
+            ->whereNotNull('active_for_request_id')
+            ->count());
     }
 
     public function test_office_fallback_creates_temporary_revision_with_force_change(): void
@@ -507,6 +582,8 @@ class PasswordRevisionTest extends TestCase
             $this->fail('Expected conflict on second replacement');
         } catch (ConflictHttpException $exception) {
             $this->assertNotEmpty($exception->getMessage());
+            $this->assertStringNotContainsString('SQLSTATE', $exception->getMessage());
+            $this->assertStringNotContainsString('prr_active_unique', $exception->getMessage());
         }
 
         $this->assertSame(1, PasswordResetRevision::query()

@@ -11,11 +11,14 @@ use App\Jobs\ResetDirectoryPasswordsJob;
 use App\Models\PasswordResetRequest;
 use App\Models\PasswordResetRevision;
 use App\Models\User;
+use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Support\Facades\DB;
 use Symfony\Component\HttpKernel\Exception\ConflictHttpException;
 
 class PasswordRevisionService
 {
+    private const CONCURRENT_UPDATE_MESSAGE = 'This request was already updated by someone else. Refresh and try again.';
+
     public function __construct(
         private readonly AuditLogService $auditLog,
         private readonly PendingPasswordService $pendingPasswords,
@@ -30,10 +33,42 @@ class PasswordRevisionService
     private function runTransactionally(callable $callback)
     {
         if (DB::transactionLevel() > 0) {
-            return $callback();
+            return $this->withConcurrentConflictHandling($callback);
         }
 
-        return DB::transaction($callback);
+        return DB::transaction(fn () => $this->withConcurrentConflictHandling($callback));
+    }
+
+    /**
+     * @template TReturn
+     *
+     * @param  callable(): TReturn  $callback
+     * @return TReturn
+     */
+    private function withConcurrentConflictHandling(callable $callback)
+    {
+        try {
+            return $callback();
+        } catch (UniqueConstraintViolationException $exception) {
+            throw $this->concurrentUpdateConflict($exception);
+        }
+    }
+
+    private function concurrentUpdateConflict(?\Throwable $previous = null): ConflictHttpException
+    {
+        return new ConflictHttpException(self::CONCURRENT_UPDATE_MESSAGE, $previous);
+    }
+
+    /**
+     * @param  array<string, mixed>  $attributes
+     */
+    private function createActiveRevision(array $attributes): PasswordResetRevision
+    {
+        try {
+            return PasswordResetRevision::query()->create($attributes);
+        } catch (UniqueConstraintViolationException $exception) {
+            throw $this->concurrentUpdateConflict($exception);
+        }
     }
 
     public function projectToRequest(PasswordResetRequest $request, PasswordResetRevision $revision): void
@@ -85,13 +120,22 @@ class PasswordRevisionService
             return $active;
         }
 
-        return PasswordResetRevision::query()->create([
-            'password_reset_request_id' => $request->id,
-            'revision_number' => 1,
-            'status' => PasswordResetRevisionStatus::Active,
-            'active_for_request_id' => $request->id,
-            'retry_available' => false,
-        ]);
+        try {
+            return $this->createActiveRevision([
+                'password_reset_request_id' => $request->id,
+                'revision_number' => 1,
+                'status' => PasswordResetRevisionStatus::Active,
+                'active_for_request_id' => $request->id,
+                'retry_available' => false,
+            ]);
+        } catch (ConflictHttpException $exception) {
+            $existing = $this->activeRevision($request);
+            if ($existing !== null) {
+                return $existing;
+            }
+
+            throw $exception;
+        }
     }
 
     public function retryFailedDirectories(PasswordResetRequest $request, User $admin): void
@@ -196,7 +240,7 @@ class PasswordRevisionService
                 ];
             }
 
-            $new = PasswordResetRevision::query()->create([
+            $new = $this->createActiveRevision([
                 'password_reset_request_id' => $locked->id,
                 'revision_number' => $previous->revision_number + 1,
                 'password_mode' => ResetPasswordMode::StudentSelectedPendingApproval->value,
@@ -393,7 +437,7 @@ class PasswordRevisionService
                 ];
             }
 
-            $revision = PasswordResetRevision::query()->create([
+            $revision = $this->createActiveRevision([
                 'password_reset_request_id' => $locked->id,
                 'revision_number' => max(1, $nextNumber),
                 'status' => PasswordResetRevisionStatus::Active,
