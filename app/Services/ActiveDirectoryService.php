@@ -14,6 +14,11 @@ use LdapRecord\Models\ActiveDirectory\User;
 
 class ActiveDirectoryService implements DirectoryPasswordResetter
 {
+    /**
+     * Named LdapRecord container connection (v4 registers names on Container, not Connection).
+     */
+    public const CONNECTION_NAME = 'sspkiosk-ad';
+
     public function key(): string
     {
         return 'active_directory';
@@ -61,10 +66,9 @@ class ActiveDirectoryService implements DirectoryPasswordResetter
         $sam = $this->samAccountName($student);
 
         try {
-            $connection = $this->makeConnection();
-            Container::addConnection($connection);
+            $this->registerConnection();
 
-            $users = User::on($connection->getName())
+            $users = User::on(self::CONNECTION_NAME)
                 ->in((string) config('active-directory.student_ou'))
                 ->where('objectcategory', '=', 'person')
                 ->where('objectclass', '=', 'user')
@@ -89,7 +93,8 @@ class ActiveDirectoryService implements DirectoryPasswordResetter
 
             /** @var User $user */
             $user = $users->first();
-            $user->setPassword($password);
+            // LdapRecord v4: reset via unicodepwd mutator (no public setPassword()).
+            $user->unicodepwd = $password;
             $user->save();
 
             $user->update([
@@ -148,6 +153,18 @@ class ActiveDirectoryService implements DirectoryPasswordResetter
     }
 
     /**
+     * Build and register the named container connection used by User::on().
+     * Naming is Container-managed in v4 — Connection has no setName()/getName().
+     */
+    public function registerConnection(): Connection
+    {
+        $connection = new Connection($this->ldapConnectionConfig());
+        Container::addConnection($connection, self::CONNECTION_NAME);
+
+        return $connection;
+    }
+
+    /**
      * @return array{
      *     enabled: bool,
      *     configured: bool,
@@ -192,15 +209,16 @@ class ActiveDirectoryService implements DirectoryPasswordResetter
         }
 
         try {
-            $connection = $this->makeConnection();
+            $connection = $this->registerConnection();
             $connection->connect();
             $result['bind_ok'] = true;
 
             $ou = (string) config('active-directory.student_ou');
-            $result['ou_readable'] = $connection->query()->in($ou)->limit(1)->get() !== false;
+            $connection->query()->in($ou)->limit(1)->get();
+            $result['ou_readable'] = true;
 
             if ($sampleSam !== null && $sampleSam !== '') {
-                $users = User::on($connection->getName())
+                $users = User::on(self::CONNECTION_NAME)
                     ->in($ou)
                     ->where('objectcategory', '=', 'person')
                     ->where('objectclass', '=', 'user')
@@ -238,20 +256,23 @@ class ActiveDirectoryService implements DirectoryPasswordResetter
         return is_array($hosts) && $hosts !== [];
     }
 
-    private function makeConnection(): Connection
-    {
-        $connection = new Connection($this->ldapConnectionConfig());
-        $connection->setName('sspkiosk-ad');
-
-        return $connection;
-    }
-
     public function mapLdapException(\Throwable $exception): ActiveDirectoryException
     {
         if ($exception instanceof ConfigurationException) {
             return new ActiveDirectoryException(
                 'Active Directory connection configuration is invalid.',
                 'configuration_error',
+                DirectoryRetryMode::None,
+                $exception,
+            );
+        }
+
+        // Programming/API errors (undefined method, ArgumentCountError, TypeError, …).
+        // Never disguise these as connection_failed.
+        if ($exception instanceof \Error) {
+            return new ActiveDirectoryException(
+                'Active Directory integration error.',
+                'unexpected_error',
                 DirectoryRetryMode::None,
                 $exception,
             );

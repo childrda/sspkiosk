@@ -7,6 +7,8 @@ use App\Services\ActiveDirectoryService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use LdapRecord\Configuration\ConfigurationException;
 use LdapRecord\Connection;
+use LdapRecord\Container;
+use LdapRecord\Models\ActiveDirectory\User;
 use Tests\TestCase;
 
 class ActiveDirectoryLdapConfigTest extends TestCase
@@ -73,6 +75,47 @@ class ActiveDirectoryLdapConfigTest extends TestCase
         $this->assertSame('configuration_error', $mapped->reason);
         $this->assertSame(DirectoryRetryMode::None, $mapped->retryMode);
         $this->assertStringContainsString('configuration is invalid', $mapped->getMessage());
+    }
+
+    public function test_register_connection_uses_container_name_without_setname_getname(): void
+    {
+        Container::getNewInstance();
+
+        $service = app(ActiveDirectoryService::class);
+        $source = file_get_contents(app_path('Services/ActiveDirectoryService.php'));
+
+        $this->assertStringNotContainsString('->setName(', $source);
+        $this->assertStringNotContainsString('->getName()', $source);
+        $this->assertStringNotContainsString('->setPassword(', $source);
+        $this->assertStringContainsString('unicodepwd', $source);
+        $this->assertStringContainsString('Container::addConnection', $source);
+        $this->assertStringContainsString('User::on(self::CONNECTION_NAME)', $source);
+
+        $connection = $service->registerConnection();
+
+        $this->assertInstanceOf(Connection::class, $connection);
+        $this->assertFalse(method_exists($connection, 'setName'));
+        $this->assertFalse(method_exists($connection, 'getName'));
+        $this->assertTrue(Container::hasConnection(ActiveDirectoryService::CONNECTION_NAME));
+        $this->assertSame(
+            $connection,
+            Container::getConnection(ActiveDirectoryService::CONNECTION_NAME),
+        );
+
+        // User::on() must resolve against the registered name without a PHP Error.
+        $builder = User::on(ActiveDirectoryService::CONNECTION_NAME);
+        $this->assertNotNull($builder);
+    }
+
+    public function test_php_error_maps_to_unexpected_error_not_connection_failed(): void
+    {
+        $mapped = app(ActiveDirectoryService::class)->mapLdapException(
+            new \Error('Call to undefined method LdapRecord\Connection::setName()'),
+        );
+
+        $this->assertSame('unexpected_error', $mapped->reason);
+        $this->assertSame(DirectoryRetryMode::None, $mapped->retryMode);
+        $this->assertStringContainsString('integration error', $mapped->getMessage());
     }
 
     public function test_ad_check_prints_reason_on_incomplete_config(): void
