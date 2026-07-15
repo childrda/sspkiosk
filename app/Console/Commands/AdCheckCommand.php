@@ -8,13 +8,16 @@ use Illuminate\Console\Command;
 
 class AdCheckCommand extends Command
 {
-    protected $signature = 'ssp:ad-check {--sam= : Optional sAMAccountName to resolve in the student OU}';
+    protected $signature = 'ssp:ad-check
+                            {--sam= : Optional sAMAccountName to resolve in the student OU}
+                            {--debug : Print exception class and sanitized message (never the bind password)}';
 
     protected $description = 'Validate Active Directory LDAPS configuration and connectivity';
 
     public function handle(ActiveDirectoryService $activeDirectory, AuditLogService $auditLog): int
     {
         $sample = $this->option('sam');
+        $debug = (bool) $this->option('debug');
         $result = $activeDirectory->healthCheck(is_string($sample) && $sample !== '' ? $sample : null);
 
         $this->line('AD enabled: '.($result['enabled'] ? 'yes' : 'no'));
@@ -23,6 +26,10 @@ class AdCheckCommand extends Command
 
         if ($result['bind_ok'] !== null) {
             $this->line('LDAPS bind: '.($result['bind_ok'] ? 'ok' : 'failed'));
+        }
+
+        if ($result['reason'] !== null) {
+            $this->line('Reason: '.$result['reason']);
         }
 
         if ($result['ou_readable'] !== null) {
@@ -35,12 +42,19 @@ class AdCheckCommand extends Command
 
         $this->info($result['message']);
 
+        if ($debug && $result['bind_ok'] === false) {
+            $this->line('Exception class: '.($result['exception_class'] ?? '—'));
+            $this->line('Exception message: '.($result['exception_message'] ?? '—'));
+        }
+
         $auditLog->logSystem('admin.ad_check.executed', 'system', 'ad-check', [
             'sam_supplied' => is_string($sample) && $sample !== '',
             'enabled' => $result['enabled'],
             'configured' => $result['configured'],
             'bind_ok' => $result['bind_ok'],
+            'reason' => $result['reason'],
             'sample_status' => $result['sample_status'],
+            'debug' => $debug,
         ]);
 
         if (! $result['enabled']) {

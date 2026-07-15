@@ -7,6 +7,7 @@ use App\Enums\DirectoryRetryMode;
 use App\Exceptions\ActiveDirectoryException;
 use App\Models\Student;
 use Illuminate\Support\Str;
+use LdapRecord\Configuration\ConfigurationException;
 use LdapRecord\Connection;
 use LdapRecord\Container;
 use LdapRecord\Models\ActiveDirectory\User;
@@ -121,7 +122,44 @@ class ActiveDirectoryService implements DirectoryPasswordResetter
     }
 
     /**
-     * @return array{enabled: bool, configured: bool, port: int, bind_ok: bool|null, ou_readable: bool|null, sample_status: string|null, message: string}
+     * LdapRecord v4 connection options (directorytree/ldaprecord 4.0.6).
+     *
+     * LDAPS: use_tls=true (ldaps:// on 636). StartTLS (use_starttls) is prohibited.
+     * Removed v3 keys use_ssl / old use_tls-as-StartTLS must not be passed.
+     *
+     * @return array<string, mixed>
+     */
+    public function ldapConnectionConfig(): array
+    {
+        return [
+            'hosts' => config('active-directory.hosts'),
+            'base_dn' => config('active-directory.base_dn'),
+            'username' => config('active-directory.username'),
+            'password' => config('active-directory.password'),
+            'port' => (int) config('active-directory.port', 636),
+            // LdapRecord v4: use_tls enables ldaps://. There is no "encryption" key in 4.0.6.
+            'use_tls' => true,
+            'use_starttls' => false,
+            'timeout' => (int) config('active-directory.timeout', 10),
+            'options' => extension_loaded('ldap') ? [
+                LDAP_OPT_X_TLS_REQUIRE_CERT => LDAP_OPT_X_TLS_DEMAND,
+            ] : [],
+        ];
+    }
+
+    /**
+     * @return array{
+     *     enabled: bool,
+     *     configured: bool,
+     *     port: int,
+     *     bind_ok: bool|null,
+     *     ou_readable: bool|null,
+     *     sample_status: string|null,
+     *     reason: string|null,
+     *     exception_class: string|null,
+     *     exception_message: string|null,
+     *     message: string
+     * }
      */
     public function healthCheck(?string $sampleSam = null): array
     {
@@ -134,6 +172,9 @@ class ActiveDirectoryService implements DirectoryPasswordResetter
             'bind_ok' => null,
             'ou_readable' => null,
             'sample_status' => null,
+            'reason' => null,
+            'exception_class' => null,
+            'exception_message' => null,
             'message' => '',
         ];
 
@@ -145,6 +186,7 @@ class ActiveDirectoryService implements DirectoryPasswordResetter
 
         if (! $configured) {
             $result['message'] = 'Active Directory configuration is incomplete or LDAPS (636) is not available.';
+            $result['reason'] = 'not_configured';
 
             return $result;
         }
@@ -174,8 +216,16 @@ class ActiveDirectoryService implements DirectoryPasswordResetter
 
             $result['message'] = 'Active Directory LDAPS health check succeeded.';
         } catch (\Throwable $exception) {
+            $mapped = $exception instanceof ActiveDirectoryException
+                ? $exception
+                : $this->mapLdapException($exception);
+
             $result['bind_ok'] = false;
-            $result['message'] = 'Active Directory health check failed.';
+            $result['reason'] = $mapped->reason;
+            $result['exception_class'] = $exception::class;
+            $result['exception_message'] = $this->sanitizeExceptionMessage($exception);
+            $result['message'] = 'Active Directory health check failed: '.$mapped->getMessage()
+                .' (reason: '.$mapped->reason.')';
         }
 
         return $result;
@@ -190,29 +240,23 @@ class ActiveDirectoryService implements DirectoryPasswordResetter
 
     private function makeConnection(): Connection
     {
-        $name = 'sspkiosk-ad';
-
-        $connection = new Connection([
-            'hosts' => config('active-directory.hosts'),
-            'base_dn' => config('active-directory.base_dn'),
-            'username' => config('active-directory.username'),
-            'password' => config('active-directory.password'),
-            'port' => (int) config('active-directory.port', 636),
-            'use_ssl' => true,
-            'use_tls' => false,
-            'timeout' => (int) config('active-directory.timeout', 10),
-            'options' => extension_loaded('ldap') ? [
-                LDAP_OPT_X_TLS_REQUIRE_CERT => LDAP_OPT_X_TLS_DEMAND,
-            ] : [],
-        ]);
-
-        $connection->setName($name);
+        $connection = new Connection($this->ldapConnectionConfig());
+        $connection->setName('sspkiosk-ad');
 
         return $connection;
     }
 
-    private function mapLdapException(\Throwable $exception): ActiveDirectoryException
+    public function mapLdapException(\Throwable $exception): ActiveDirectoryException
     {
+        if ($exception instanceof ConfigurationException) {
+            return new ActiveDirectoryException(
+                'Active Directory connection configuration is invalid.',
+                'configuration_error',
+                DirectoryRetryMode::None,
+                $exception,
+            );
+        }
+
         $message = strtolower($exception->getMessage());
 
         if (str_contains($message, 'timeout') || str_contains($message, 'timed out')) {
@@ -251,5 +295,17 @@ class ActiveDirectoryService implements DirectoryPasswordResetter
             DirectoryRetryMode::None,
             $exception,
         );
+    }
+
+    private function sanitizeExceptionMessage(\Throwable $exception): string
+    {
+        $message = $exception->getMessage();
+        $password = (string) config('active-directory.password', '');
+
+        if ($password !== '' && str_contains($message, $password)) {
+            $message = str_replace($password, '[redacted]', $message);
+        }
+
+        return $message;
     }
 }

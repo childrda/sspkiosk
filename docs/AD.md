@@ -46,7 +46,12 @@ Username derivation: email local part → sAMAccountName (max 20 characters, `[A
 ```bash
 php artisan ssp:ad-check
 php artisan ssp:ad-check --sam=jdoe
+php artisan ssp:ad-check --debug
 ```
+
+Failed checks print a sanitized reason (`configuration_error`, `connection_failed`, …). `--debug` adds the exception class and message; the bind password is never printed.
+
+LdapRecord **v4** connection options use `use_tls=true` for LDAPS (port 636). Do not pass removed v3 keys `use_ssl` / StartTLS-as-`use_tls`. StartTLS (`use_starttls`) is prohibited. The app's own `config('active-directory.use_ssl')` flag remains for validation only and is not passed into LdapRecord.
 
 Every run is audited as `admin.ad_check.executed`. The admin dashboard shows AD enabled/configured status alongside queue depth.
 
